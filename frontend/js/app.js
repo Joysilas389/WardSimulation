@@ -141,7 +141,7 @@
     switch (m.t) {
       case 'hello':
         S.me = m.me; S.cfg = m; S.myDept = m.me.dept; S.ticker = m.ticker; S.feed = m.feed;
-        buildMap(); renderMe(); renderPAList();
+        buildMap(); renderMe(); renderPAList(); setupView();
         if (S.ticker[0]) showPA(S.ticker[0], false);
         break;
       case 'state': S.state = m; render(); break;
@@ -204,6 +204,29 @@
     if (window.innerWidth < 992) $('#deptHead').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // ---------- 3D view ----------
+  function setupView() {
+    if (S.viewReady) return; S.viewReady = true;
+    const wrap = document.querySelector('.map-wrap');
+    const can3d = !!(window.World3D && window.World3D.supported());
+    let want = localStorage.getItem('wl_view') || '3d';
+    if (!can3d) { want = 'plan'; $('#view3d').disabled = true; }
+    const apply = (v) => {
+      S.view3d = v === '3d' && can3d && window.World3D.init($('#world'), S.cfg, moveTo);
+      wrap.classList.toggle('is-3d', !!S.view3d);
+      $(S.view3d ? '#view3d' : '#viewPlan').checked = true;
+      if (window.World3D) window.World3D.setVisible(!!S.view3d);
+      localStorage.setItem('wl_view', S.view3d ? '3d' : 'plan');
+      if (S.view3d && S.state) window.World3D.update(S.state, S.me, S.myDept);
+    };
+    document.querySelectorAll('input[name=view]').forEach((r) => r.addEventListener('change', () => apply(r.value)));
+    $('#w3dFollow').addEventListener('click', (e) => { const on = !e.currentTarget.classList.contains('active'); e.currentTarget.classList.toggle('active', on); window.World3D.follow(on); });
+    $('#w3dIn').addEventListener('click', () => window.World3D.zoom(0.8));
+    $('#w3dOut').addEventListener('click', () => window.World3D.zoom(1.25));
+    $('#w3dReset').addEventListener('click', () => { $('#w3dFollow').classList.remove('active'); window.World3D.reset(); });
+    apply(want);
+  }
+
   function myRole() { return S.me?.role; }
 
   function render() {
@@ -221,6 +244,7 @@
     const bp = $('#bedPill'); bp.innerHTML = `<i class="bi bi-hospital"></i><b>${free}</b> ward beds free`; bp.classList.toggle('pill-warn', free <= 2);
     $('#clock').innerHTML = `<i class="bi bi-clock"></i>${new Date(st.now * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Accra' })}`;
     renderMap(); renderSession(); renderBoard();
+    if (S.view3d && window.World3D) window.World3D.update(st, S.me, S.myDept);
     const active = document.activeElement;
     if (!(active && active.closest && active.closest('#deptBody') && active.matches('select'))) renderDept();
     if (S.openPid) {

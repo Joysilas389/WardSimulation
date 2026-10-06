@@ -51,6 +51,10 @@ Patients lose condition while they wait, faster for red triage. At zero they are
 
 The admin dashboard refreshes every 15 seconds and is protected by `WARDLIFE_ADMIN_TOKEN`.
 
+## 3D hospital
+
+The game opens in a 3D view built with three.js (`frontend/js/world3d.js`): rooms with walls and doors, beds whose blankets show the triage colour (and flash red when a patient is deteriorating), staff who walk the corridors between departments, ambulances that drive in and out with flashing lights, Accra day and night, and dimmed lights during power cuts. Drag to turn, pinch or use the buttons to zoom, and tap a room to walk there. Players can switch to the flat floor plan at any time, and phones without WebGL get the floor plan automatically.
+
 ## Files
 
 ```
@@ -61,6 +65,7 @@ backend/
   db.py        SQLite storage
 frontend/
   index.html, js/app.js, css/style.css   The game (Bootstrap 5)
+  js/world3d.js                          The 3D hospital (three.js)
   admin.html, js/admin.js                The dashboard
 ```
 
