@@ -1,0 +1,14 @@
+# Render Blueprint: deploys the game (FastAPI + websockets) as one web service.
+services:
+  - type: web
+    name: wardsimulation
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/public-stats
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: WARDLIFE_ADMIN_TOKEN
+        generateValue: true
