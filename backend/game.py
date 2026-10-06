@@ -27,7 +27,7 @@ ROUND_EVERY, MEETING_EVERY = 420, 900
 Q_SECONDS, REVEAL_SECONDS, SUMMARY_SECONDS = 25, 8, 15
 ACTIONS = {"move", "folder", "register", "handover", "triage", "clerk", "order", "run_test", "decide",
            "dispense", "care", "operate", "transfer", "obs", "answer", "chat", "present", "endorse", "my_cases",
-           "answer_call", "dispatch", "call_centre", "order_o2", "early_discharge"}
+           "answer_call", "dispatch", "call_centre", "order_o2", "early_discharge", "pos"}
 CALL_ROLES = ("doctor", "midwife", "nurse")
 
 
@@ -44,6 +44,7 @@ class Engine:
         self.patients = {}
         self.seq = int(db.meta_get("patient_seq") or 0)
         self.outbox = []
+        self.pos_dirty = False
         self.ticker = deque(maxlen=8)
         self.power_until = 0.0
         self.next_power = t + random.uniform(600, 1100)
@@ -117,7 +118,8 @@ class Engine:
         self.conns[ws] = uid
         if uid not in self.players:
             self.players[uid] = {"uid": uid, "name": user["name"], "role": user["role"], "inst": user["institution"],
-                                 "xp": user["xp"], "dept": DEFAULT_DEPT[user["role"]], "socks": 0}
+                                 "xp": user["xp"], "dept": DEFAULT_DEPT[user["role"]], "socks": 0,
+                                 "pos": None, "pos_at": 0.0}
             if len(self.players) <= 60:
                 self.pa(f"{user['name']} ({ROLES[user['role']]['name']}) has started a shift.", "join")
             if not self.patients:
@@ -599,7 +601,37 @@ class Engine:
                 cases.pop(next(iter(cases)))
 
     # ---------- tick ----------
+    async def run_positions(self):
+        """Send where everyone is standing five times a second, so walking looks smooth."""
+        while True:
+            await asyncio.sleep(0.2)
+            if not self.pos_dirty or not self.conns:
+                continue
+            self.pos_dirty = False
+            try:
+                self.to_all({"t": "pos", "p": [[u, *p["pos"]] for u, p in list(self.players.items())[:400] if p.get("pos")]})
+                await self.flush()
+            except Exception:
+                traceback.print_exc()
+
+    def act_pos(self, uid, m):
+        p = self.players[uid]
+        t = time.time()
+        if t - p["pos_at"] < 0.08:
+            return None
+        try:
+            x, z, ry = float(m.get("x")), float(m.get("z")), float(m.get("ry"))
+        except (TypeError, ValueError):
+            return None
+        if not (-90 < x < 90 and -90 < z < 90 and -10 < ry < 10):
+            return None
+        p["pos"] = (round(x, 2), round(z, 2), round(ry, 2), 1 if m.get("m") else 0)
+        p["pos_at"] = t
+        self.pos_dirty = True
+        return None
+
     async def run(self):
+        asyncio.get_running_loop().create_task(self.run_positions())
         while True:
             t = time.time()
             try:

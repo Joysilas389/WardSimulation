@@ -53,7 +53,9 @@ The admin dashboard refreshes every 15 seconds and is protected by `WARDLIFE_ADM
 
 ## 3D hospital
 
-The game opens in a 3D view built with three.js (`frontend/js/world3d.js`): rooms with walls and doors, beds whose blankets show the triage colour (and flash red when a patient is deteriorating), staff who walk the corridors between departments, ambulances that drive in and out with flashing lights, Accra day and night, and dimmed lights during power cuts. Drag to turn, pinch or use the buttons to zoom, and tap a room to walk there. Players can switch to the flat floor plan at any time, and phones without WebGL get the floor plan automatically.
+The game opens in a 3D hospital built with three.js (`frontend/js/world3d.js`). Every player is a 3D character dressed for their role (doctors in white coats with stethoscopes, nurses and midwives in caps, paramedics in green) who walks with swinging arms and bending knees. Tap **Walk** for third-person control: a joystick on phones, W A S D on keyboards, and drag to look around. Walking through a door puts you in that department. Everyone sees each other move live (positions are sent five times a second). Chat messages appear as speech bubbles above the speaker while their character talks.
+
+Hospital life fills the corridors on each screen: relatives in kente, cleaners with mops, security at the gate and a pure water seller, chatting in Twi and English. Beds show triage colours and flash red when a patient deteriorates, ambulances drive in and out with sirens, and the sky follows Accra time. **Floor plan** switches to the flat view; phones without WebGL get it automatically.
 
 ## Files
 

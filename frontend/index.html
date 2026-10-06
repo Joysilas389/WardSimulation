@@ -98,12 +98,15 @@
       </div>
       <div class="world" id="world">
         <div class="world-tools">
-          <button class="btn btn-light btn-sm" id="w3dFollow" title="Follow me"><i class="bi bi-person-bounding-box"></i><span class="d-none d-sm-inline"> Follow me</span></button>
+          <button class="btn btn-light btn-sm" id="w3dWalk" title="Walk your character"><i class="bi bi-person-walking"></i><span class="d-none d-sm-inline"> Walk</span></button>
           <button class="btn btn-light btn-sm" id="w3dIn" aria-label="Zoom in"><i class="bi bi-plus-lg"></i></button>
           <button class="btn btn-light btn-sm" id="w3dOut" aria-label="Zoom out"><i class="bi bi-dash-lg"></i></button>
-          <button class="btn btn-light btn-sm" id="w3dReset" aria-label="Reset view"><i class="bi bi-arrows-fullscreen"></i></button>
+          <button class="btn btn-light btn-sm" id="w3dFull" aria-label="Full screen"><i class="bi bi-fullscreen"></i></button>
         </div>
-        <div class="world-hint">Drag to turn, pinch to zoom, tap a room to walk there.</div>
+        <div class="world-pa" id="worldPa"></div>
+        <div class="world-room" id="worldRoom"></div>
+        <div class="joy" aria-label="Move your character"><div class="joy-knob"></div></div>
+        <div class="world-hint" id="worldHint">Drag to turn, pinch to zoom, tap a room to walk there.</div>
       </div>
       <div class="map" id="map">
         <div class="road" style="grid-area: road">
