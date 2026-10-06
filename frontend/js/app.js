@@ -142,6 +142,7 @@
       case 'hello':
         S.me = m.me; S.cfg = m; S.myDept = m.me.dept; S.ticker = m.ticker; S.feed = m.feed;
         buildMap(); renderMe(); renderPAList(); setupView();
+        if (savedLook()) send({ a: 'look', look: savedLook() });
         if (S.ticker[0]) showPA(S.ticker[0], false);
         break;
       case 'state': S.state = m; render(); break;
@@ -149,6 +150,7 @@
       case 'xp':
         S.me = m.me; renderMe();
         toast(`${m.amount > 0 ? '+' : ''}${m.amount} XP. ${m.reason}`, m.amount >= 0 ? 'good' : 'bad');
+        if (S.view3d) window.World3D.event(m.amount, m.reason);
         break;
       case 'pa': S.ticker.unshift(m); S.ticker = S.ticker.slice(0, 30); showPA(m, true); renderPAList(); worldPA(m.text); break;
       case 'error': toast(m.msg, 'bad'); break;
@@ -213,7 +215,8 @@
     let want = localStorage.getItem('wl_view') || '3d';
     if (!can3d) { want = 'plan'; $('#view3d').disabled = true; }
     const apply = (v) => {
-      S.view3d = v === '3d' && can3d && window.World3D.init($('#world'), S.cfg, moveTo, send);
+      S.view3d = v === '3d' && can3d && window.World3D.init($('#world'), S.cfg, moveTo, send, worldHooks());
+      if (S.view3d && !localStorage.getItem('wl_look_done')) setTimeout(openCreator, 1200);
       wrap.classList.toggle('is-3d', !!S.view3d);
       $(S.view3d ? '#view3d' : '#viewPlan').checked = true;
       if (window.World3D) window.World3D.setVisible(!!S.view3d);
@@ -227,6 +230,7 @@
       $('#worldHint').textContent = on ? 'Use the joystick or W A S D to walk. Drag to look around.' : 'Drag to turn, pinch to zoom, tap a room to walk there.';
       localStorage.setItem('wl_walk', on ? '1' : '');
     });
+    $('#w3dLook').addEventListener('click', openCreator);
     $('#w3dIn').addEventListener('click', () => window.World3D.zoom(0.8));
     $('#w3dOut').addEventListener('click', () => window.World3D.zoom(1.25));
     $('#w3dFull').addEventListener('click', (e) => {
@@ -237,6 +241,75 @@
     if (localStorage.getItem('wl_walk') && can3d) setTimeout(() => $('#w3dWalk').click(), 300);
     apply(want);
   }
+
+  // ---------- hooks the 3D world uses ----------
+  function worldHooks() {
+    return {
+      patientActions(pid) {
+        const p = S.state && S.state.patients.find((x) => x.pid === pid); if (!p) return [];
+        const saved = S.myDept; S.myDept = p.loc; const html = actionsFor(p).html; S.myDept = saved;
+        const d = document.createElement('div'); d.innerHTML = html;
+        return [...d.querySelectorAll('[data-a]')].filter((b) => !b.disabled && b.dataset.a !== 'call_centre')
+          .map((b) => ({ label: b.textContent.trim(), data: { ...b.dataset } }));
+      },
+      act(data) {
+        if (data.a === 'folder') { openFolder(data.pid); return; }
+        const msg = { a: data.a, pid: data.pid };
+        if (data.test) msg.test = data.test;
+        if (data.query) msg.query = true;
+        send(msg);
+      },
+      chat(text) { send({ a: 'chat', text, scope: 'dept' }); },
+      notify(text) { toast(text, 'info'); worldPA(text); },
+      onHere(room, name) { S.hereName = name; $('#worldRoom').textContent = `You: ${name}`; },
+      openCreator,
+    };
+  }
+
+  // ---------- character creator ----------
+  const LOOK_OPTS = {
+    sex: { label: 'Body', chips: [[0, 'Female'], [1, 'Male']] },
+    skin: { label: 'Skin tone', swatches: ['#5A3825', '#6B4423', '#4A2C1D', '#7A4E2D', '#3D2416'] },
+    hair: { label: 'Hair', chips: [['low', 'Low cut'], ['short', 'Short'], ['long', 'Long'], ['bun', 'Bun'], ['braids', 'Braids'], ['wrap', 'Headwrap'], ['bald', 'Bald']] },
+    hairc: { label: 'Hair colour', swatches: ['#1A1110', '#3B2414', '#8A8A8A'] },
+    build: { label: 'Build', chips: [[0, 'Slim'], [1, 'Average'], [2, 'Broad']] },
+    height: { label: 'Height', chips: [[0, 'Short'], [1, 'Average'], [2, 'Tall']] },
+    uni: { label: 'Uniform colour', swatches: ['role', '#1E5AA8', '#0E7C7B', '#6B2D86', '#2E7D32', '#8B1E3F'] },
+    glasses: { label: 'Glasses', chips: [[0, 'None'], [1, 'Glasses']] },
+  };
+  function savedLook() { try { return JSON.parse(localStorage.getItem('wl_look')) || null; } catch (_) { return null; } }
+  function openCreator() {
+    if (!S.view3d) return;
+    S.look = savedLook() || { sex: 1, skin: 0, hair: 'short', hairc: 0, build: 1, height: 1, uni: 0, glasses: 0 };
+    if (S.look.sex === undefined) S.look.sex = 1;
+    renderCreator();
+    window.World3D.previewLook(S.look);
+    const el = $('#creator'); const wide = window.innerWidth >= 992;
+    el.classList.toggle('offcanvas-end', wide); el.classList.toggle('offcanvas-bottom', !wide);
+    if (!wide) $('#world').scrollIntoView({ block: 'start' });
+    bootstrap.Offcanvas.getOrCreateInstance(el).show();
+  }
+  function renderCreator() {
+    const L = S.look;
+    $('#creatorBody').innerHTML = Object.entries(LOOK_OPTS).map(([k, o]) => `<div class="opt-row"><span>${o.label}</span><div class="opts">${
+      o.swatches ? o.swatches.map((c, i) => `<button type="button" class="swatch ${L[k] === i ? 'on' : ''}" data-look="${k}" data-v="${i}" aria-label="${o.label} ${i + 1}" style="background:${c === 'role' ? `var(--r-${S.me.role})` : c}"></button>`).join('')
+        : o.chips.map(([v, t]) => `<button type="button" class="btn btn-sm chip ${L[k] === v ? 'btn-dark' : 'btn-outline-secondary'}" data-look="${k}" data-v="${v}">${t}</button>`).join('')}</div></div>`).join('');
+  }
+  $('#creatorBody').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-look]'); if (!b) return;
+    const k = b.dataset.look; const v = k === 'hair' ? b.dataset.v : Number(b.dataset.v);
+    S.look = { ...S.look, [k]: v }; renderCreator(); window.World3D.previewLook(S.look);
+  });
+  $('#creatorSave').addEventListener('click', () => {
+    localStorage.setItem('wl_look', JSON.stringify(S.look)); localStorage.setItem('wl_look_done', '1');
+    send({ a: 'look', look: S.look });
+    bootstrap.Offcanvas.getOrCreateInstance($('#creator')).hide();
+  });
+  $('#creator').addEventListener('hidden.bs.offcanvas', () => {
+    localStorage.setItem('wl_look_done', '1');
+    if (window.World3D) window.World3D.endPreview();
+    const saved = savedLook(); if (saved) send({ a: 'look', look: saved });
+  });
 
   function worldPA(text) {
     const el = $('#worldPa'); if (!el) return;
@@ -261,7 +334,7 @@
     const bp = $('#bedPill'); bp.innerHTML = `<i class="bi bi-hospital"></i><b>${free}</b> ward beds free`; bp.classList.toggle('pill-warn', free <= 2);
     $('#clock').innerHTML = `<i class="bi bi-clock"></i>${new Date(st.now * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Accra' })}`;
     renderMap(); renderSession(); renderBoard();
-    if (S.view3d && window.World3D) { window.World3D.update(st, S.me, S.myDept); $('#worldRoom').textContent = `You: ${S.cfg.depts[S.myDept]?.name || ''}`; }
+    if (S.view3d && window.World3D) { window.World3D.update(st, S.me, S.myDept); if (!S.hereName) $('#worldRoom').textContent = `You: ${S.cfg.depts[S.myDept]?.name || ''}`; }
     const active = document.activeElement;
     if (!(active && active.closest && active.closest('#deptBody') && active.matches('select'))) renderDept();
     if (S.openPid) {
@@ -520,6 +593,7 @@
     const b = e.target.closest('[data-a]'); if (!b || b.disabled) return;
     const a = b.dataset.a; const pid = b.dataset.pid;
     if (a === 'folder') { openFolder(pid); return; }
+    if (S.view3d && window.World3D) { const why = window.World3D.cantWork(); if (why) { toast(why, 'bad'); return; } }
     const msg = { a, pid };
     if (b.dataset.test) msg.test = b.dataset.test;
     if (b.dataset.query) msg.query = true;

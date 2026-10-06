@@ -27,7 +27,7 @@ ROUND_EVERY, MEETING_EVERY = 420, 900
 Q_SECONDS, REVEAL_SECONDS, SUMMARY_SECONDS = 25, 8, 15
 ACTIONS = {"move", "folder", "register", "handover", "triage", "clerk", "order", "run_test", "decide",
            "dispense", "care", "operate", "transfer", "obs", "answer", "chat", "present", "endorse", "my_cases",
-           "answer_call", "dispatch", "call_centre", "order_o2", "early_discharge", "pos"}
+           "answer_call", "dispatch", "call_centre", "order_o2", "early_discharge", "pos", "look"}
 CALL_ROLES = ("doctor", "midwife", "nurse")
 
 
@@ -119,7 +119,7 @@ class Engine:
         if uid not in self.players:
             self.players[uid] = {"uid": uid, "name": user["name"], "role": user["role"], "inst": user["institution"],
                                  "xp": user["xp"], "dept": DEFAULT_DEPT[user["role"]], "socks": 0,
-                                 "pos": None, "pos_at": 0.0}
+                                 "pos": None, "pos_at": 0.0, "look": None}
             if len(self.players) <= 60:
                 self.pa(f"{user['name']} ({ROLES[user['role']]['name']}) has started a shift.", "join")
             if not self.patients:
@@ -614,6 +614,22 @@ class Engine:
             except Exception:
                 traceback.print_exc()
 
+    LOOK_LIMITS = {"skin": 5, "build": 3, "height": 3, "hairc": 3, "uni": 6, "glasses": 2, "sex": 2}
+    HAIRS = ("low", "short", "long", "bun", "braids", "wrap", "bald")
+
+    def act_look(self, uid, m):
+        look = m.get("look") or {}
+        clean = {}
+        for k, n in self.LOOK_LIMITS.items():
+            try:
+                v = int(look.get(k, 0))
+            except (TypeError, ValueError):
+                v = 0
+            clean[k] = v if 0 <= v < n else 0
+        clean["hair"] = look.get("hair") if look.get("hair") in self.HAIRS else "low"
+        self.players[uid]["look"] = clean
+        return None
+
     def act_pos(self, uid, m):
         p = self.players[uid]
         t = time.time()
@@ -625,7 +641,11 @@ class Engine:
             return None
         if not (-90 < x < 90 and -90 < z < 90 and -10 < ry < 10):
             return None
-        p["pos"] = (round(x, 2), round(z, 2), round(ry, 2), 1 if m.get("m") else 0)
+        try:
+            pose = int(m.get("p") or 0)
+        except (TypeError, ValueError):
+            pose = 0
+        p["pos"] = (round(x, 2), round(z, 2), round(ry, 2), 1 if m.get("m") else 0, pose if 0 <= pose < 8 else 0)
         p["pos_at"] = t
         self.pos_dirty = True
         return None
@@ -903,7 +923,7 @@ class Engine:
 
     def state_payload(self, t):
         players = [{"uid": u, "name": p["name"], "role": p["role"], "dept": p["dept"], "xp": p["xp"],
-                    "lvl": rank_for(p["role"], p["xp"])[0]} for u, p in list(self.players.items())[:400]]
+                    "lvl": rank_for(p["role"], p["xp"])[0], "look": p.get("look")} for u, p in list(self.players.items())[:400]]
         return {"t": "state", "now": t, "online": len(self.players), "peak": self.peak,
                 "power": t < self.power_until, "patients": [self.lview(p, t) for p in self.patients.values()],
                 "players": players, "session": self.session_view(t),

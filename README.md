@@ -51,11 +51,41 @@ Patients lose condition while they wait, faster for red triage. At zero they are
 
 The admin dashboard refreshes every 15 seconds and is protected by `WARDLIFE_ADMIN_TOKEN`.
 
-## 3D hospital
+## 3D hospital and Sims-style play
 
-The game opens in a 3D hospital built with three.js (`frontend/js/world3d.js`). Every player is a 3D character dressed for their role (doctors in white coats with stethoscopes, nurses and midwives in caps, paramedics in green) who walks with swinging arms and bending knees. Tap **Walk** for third-person control: a joystick on phones, W A S D on keyboards, and drag to look around. Walking through a door puts you in that department. Everyone sees each other move live (positions are sent five times a second). Chat messages appear as speech bubbles above the speaker while their character talks.
+The game opens in a 3D hospital built with three.js (`frontend/js/world3d.js`).
 
-Hospital life fills the corridors on each screen: relatives in kente, cleaners with mops, security at the gate and a pure water seller, chatting in Twi and English. Beds show triage colours and flash red when a patient deteriorates, ambulances drive in and out with sirens, and the sky follows Accra time. **Floor plan** switches to the flat view; phones without WebGL get it automatically.
+**Your character.** On first entry you design your character: skin tone, hair (low cut, short, bun, braids, headwrap, bald), hair colour, build, height, uniform colour and glasses. Everyone sees your look. Change it any time with the person button.
+
+**Needs and moods.** Your character has six needs (energy, hunger, bladder, hygiene, social, calm) that run down during a shift, faster when a red patient is in your room. A mood panel shows them, with moodlets such as *Hungry*, *Exhausted*, *Saved the day*, *Good catch!* and *Well rested*. A floating cross above your head shows your mood in green, yellow or red. Low mood slows you down, and if you are exhausted, starving or desperate for the toilet you cannot do clinical work until you sort it out.
+
+**Tap anything.** Tapping a person or object opens a menu of actions, and your character walks over and acts it out:
+- **Patients:** the real clinical steps for your role (triage, clerk, care, observations and so on), plus *Reassure* and *Check pulse*. You bend over the bed while you work.
+- **Colleagues:** *Chat*, *Tell a joke*, *Ask for a second opinion* (sent as real chat with speech bubbles) and *Wave*.
+- **Relatives, cleaners, security and the pure water seller:** they reply in Twi and English.
+- **Staff canteen:** sit down to eat jollof, waakye, kenkey and fish or red red, or drink hot cocoa.
+- **On-call room:** sleep on a bunk until rested, or take a power nap.
+- **Staff washroom:** use the toilet, wash up or wash your hands.
+- **Lab bench, CT scanner, dispensing counter and records desk:** work the queue for your role.
+
+**Moving around.** Tap the floor to walk there, or tap **Walk** for third-person control (joystick or W A S D). Walls lower automatically when you zoom in so you can see inside rooms. Other players' positions and poses (sitting, eating, sleeping) are shared live.
+
+**Hospital life.** Relatives in kente, cleaners, security and a pure water seller fill the corridors. Ambulances drive in with sirens, beds flash red when a patient deteriorates, and the sky follows Accra time. **Floor plan** switches to the flat view; phones without WebGL get it automatically.
+
+Needs and moods are saved in each player's own browser.
+
+## Characters and animations
+
+People in the 3D view use Quaternius's **Universal Base Characters** and **Universal Animation Library** (CC0, free for any use). They are compressed for phones in `frontend/models/`:
+
+| File | What it is | Size |
+|---|---|---|
+| `male.glb`, `female.glb` | Rigged base bodies with textures | about 1.4 MB each |
+| `anims.glb` | 12 animations: idle, walk, talk, sit, sit and talk, interact, kneel, pick up, push (mop), jog, formal walk, dance | about 0.2 MB |
+
+The game colours each body at runtime from the skeleton: skin tone on the head, neck and hands, and scrubs, white coats, trousers and shoes on the rest. Hair, caps, headwraps, glasses, stethoscopes and the cleaner's mop are attached to the head, chest or hand bones. If the models cannot load, or more than 45 people are on screen, the game falls back to the simpler shape-based people.
+
+Thanks to Quaternius (quaternius.com) for the free assets.
 
 ## Files
 
@@ -68,6 +98,7 @@ backend/
 frontend/
   index.html, js/app.js, css/style.css   The game (Bootstrap 5)
   js/world3d.js                          The 3D hospital (three.js)
+  models/                                Characters and animations (glTF)
   admin.html, js/admin.js                The dashboard
 ```
 

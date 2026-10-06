@@ -306,3 +306,38 @@ body.dumsor .map-wrap.is-3d { filter: none; }
 .world.walking { touch-action: none; }
 .world.full { position: fixed; inset: 0; height: 100vh; height: 100dvh; min-height: 0; border-radius: 0; z-index: 1040; }
 body.world-full-open { overflow: hidden; }
+
+/* ---------- Sims-style HUD, pie menu, creator ---------- */
+.sims-hud { position: absolute; left: 12px; top: 48px; z-index: 3; background: rgba(255,255,255,.94); border-radius: 12px; padding: .45rem .55rem; width: 210px; box-shadow: 0 2px 10px rgba(0,0,0,.18); font-size: .78rem; }
+.sims-hud .mood-btn { all: unset; cursor: pointer; display: flex; align-items: center; gap: .45rem; width: 100%; font-weight: 700; font-size: .85rem; }
+.sims-hud .mood-btn i { margin-left: auto; transition: transform .2s; }
+.sims-hud.collapsed { width: auto; }
+.sims-hud.collapsed .mood-btn i { transform: rotate(-90deg); }
+.sims-hud.collapsed .needs, .sims-hud.collapsed .moodlets:empty { display: none; }
+.sims-hud.collapsed .moodlets { margin-top: .3rem; }
+.mood-dot { width: 14px; height: 14px; border-radius: 50%; background: #2E9E5B; box-shadow: 0 0 0 3px rgba(46,158,91,.18); flex: none; }
+.needs { display: grid; gap: .28rem; margin-top: .45rem; }
+.need { display: grid; grid-template-columns: 16px 58px 1fr; align-items: center; gap: .3rem; }
+.need b { display: block; height: 8px; background: #E4EAED; border-radius: 4px; overflow: hidden; }
+.need b i { display: block; height: 100%; border-radius: 4px; transition: width .5s, background .5s; }
+.moodlets { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .45rem; }
+.moodlet { border-radius: 999px; padding: .08rem .5rem; font-weight: 600; font-size: .72rem; }
+.moodlet.good { background: #DDF3E5; color: #1D6B3C; } .moodlet.bad { background: #FBE1E4; color: #9B1C2C; }
+.pie { position: absolute; z-index: 5; width: 0; height: 0; }
+.pie-title { position: absolute; transform: translate(-50%, -50%); background: var(--ink); color: #fff; font-weight: 700; font-size: .82rem; padding: .4rem .7rem; border-radius: 999px; white-space: nowrap; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+.pie-title small { display: block; font-weight: 500; opacity: .8; font-size: .72rem; }
+.pie-item { position: absolute; left: 0; top: 0; display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; background: #fff; color: var(--ink); border: 0; border-radius: 999px; padding: .38rem .7rem; font-weight: 600; font-size: .8rem; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+.pie-item:hover, .pie-item:focus-visible { background: var(--scrub); color: #fff; }
+.pie-item i { color: var(--scrub); } .pie-item:hover i { color: #fff; }
+@keyframes pieIn { from { opacity: 0; } to { opacity: 1; } }
+.world-room { top: 12px; }
+.creator.offcanvas-bottom { height: auto !important; max-height: 44vh; }
+.creator.offcanvas-end { width: 340px; }
+.creator .opt-row .opts { display: flex; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+.creator .chip { flex: none; }
+.creator .opt-row { margin-bottom: .6rem; }
+.creator .opt-row > span { display: block; font-weight: 700; font-size: .8rem; margin-bottom: .25rem; }
+.creator .swatch { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px #C3CFD4; margin-right: .35rem; }
+.creator .swatch.on { box-shadow: 0 0 0 3px var(--scrub); }
+.creator .chip { border-radius: 999px; font-size: .82rem; font-weight: 600; margin: 0 .3rem .3rem 0; }
+@media (max-width: 767.98px) { .sims-hud { top: 46px; left: 8px; width: 180px; } .sims-hud.collapsed { width: auto; } }
