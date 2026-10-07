@@ -19,12 +19,30 @@
   Object.entries(GRID).forEach(([id, [c, r]]) => { RECT[id] = { x: colX(c), z: rowZ(r), w: W, d: D }; });
   RECT.conference = { x: 0, z: rowZ(2) + D / 2 + G + 3.2, w: 4 * W + 3 * G, d: 6.4 };
   const ROAD_Z = rowZ(0) - D / 2 - G - 3;
+  // The other facilities in the network sit north of the main road, each on its own branch road.
+  const W2 = 9; const D2 = 7;
+  const FACS = {
+    ndh: { name: 'Nkwanta District Hospital', short: 'Nkwanta', x: -104, z: -58, rooms: ['ndh_casualty', 'ndh_ward', 'ndh_mat', 'ndh_lab'] },
+    apc: { name: 'Asafo Polyclinic', short: 'Asafo', x: 12, z: -76, rooms: ['apc_opd', 'apc_mat', 'apc_lab'] },
+    och: { name: 'Odumase CHPS Compound', short: 'Odumase', x: 108, z: -50, rooms: ['och_room', 'och_mat'] },
+  };
+  const FAC_OF = {};
+  Object.entries(FACS).forEach(([f, F]) => {
+    F.rooms.forEach((id, i) => { RECT[id] = { x: F.x + (i - (F.rooms.length - 1) / 2) * (W2 + G), z: F.z, w: W2, d: D2 }; FAC_OF[id] = f; });
+    F.w = F.rooms.length * (W2 + G) + 4;
+    F.gate = new T.Vector3(F.x, 0, F.z + D2 / 2 + G + 1.6);
+  });
+  const facOfRoom = (id) => FAC_OF[id] || 'akt';
+  const ROAD_X = 200;
   const GAPS = [0, 1, 2, 3].map((c) => colX(c) + W / 2 + G / 2);
   const SLAB_X0 = colX(0) - W / 2 - 3; const SLAB_X1 = colX(4) + W / 2 + 3;
-  const BEDS = { emergency: 6, opd: 4, maternity: 6, paeds: 6, medical: 8, surgical: 8, theatre: 1 };
+  const BEDS = { emergency: 6, opd: 4, maternity: 6, paeds: 6, medical: 8, surgical: 8, theatre: 1,
+    ndh_casualty: 4, ndh_ward: 6, ndh_mat: 3, apc_opd: 2, apc_mat: 2, och_room: 2, och_mat: 1 };
   const FLOOR = { ambulance: 0x8A949C, emergency: 0xE9F1F2, radiology: 0xE4E8F0, lab: 0xEEF2F0, records: 0xEFE8DA, opd: 0xE7EEF1,
     pharmacy: 0xE9F2E6, theatre: 0xCFE7DD, maternity: 0xF4E4EA, paeds: 0xF6EDCF, medical: 0xEFEBE2, surgical: 0xE8ECE6, conference: 0xC9A47A,
-    canteen: 0xF1DFC0, oncall: 0xD9E0EC, washroom: 0xDDEDF3 };
+    canteen: 0xF1DFC0, oncall: 0xD9E0EC, washroom: 0xDDEDF3,
+    ndh_casualty: 0xE9F1F2, ndh_ward: 0xEFEBE2, ndh_mat: 0xF4E4EA, ndh_lab: 0xEEF2F0, apc_opd: 0xE7EEF1, apc_mat: 0xF4E4EA, apc_lab: 0xEEF2F0,
+    och_room: 0xF3EBDD, och_mat: 0xF4E4EA };
   const ROLE_COL = { doctor: 0x1E5AA8, student: 0x5B6CF0, nurse: 0x0E7C7B, midwife: 0x8E44AD, pharmacist: 0x2E7D32,
     lab_scientist: 0xB4532A, radiographer: 0x4F5D75, paramedic: 0xA4161A };
   const TRI = { red: 0xD7263D, orange: 0xEE7B06, yellow: 0xE9B824, green: 0x2E9E5B };
@@ -32,7 +50,7 @@
   const HIDDEN = ['en_route', 'awaiting_ambulance', 'pickup', 'leaving'];
 
   const WALLS = [];
-  const BOUNDS = { x0: SLAB_X0 - 4, x1: SLAB_X1 + 4, z0: ROAD_Z - 2.5, z1: RECT.conference.z + 13 };
+  const BOUNDS = { x0: -ROAD_X + 5, x1: ROAD_X - 5, z0: -100, z1: RECT.conference.z + 13 };
   const hash = (s) => { let h = 2166136261; for (const ch of String(s)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
   const rnd = (seed, i) => ((hash(`${seed}:${i}`) % 1000) / 1000);
 
@@ -106,13 +124,22 @@
 
   // ---------- building the world ----------
   function buildWorld() {
-    scene.add(mesh('box', mat(0x7FA35B), 260, 0.2, 220, 0, -0.12, 10, false));                         // grass
+    scene.add(mesh('box', mat(0x7FA35B), ROAD_X * 2 + 160, 0.2, 360, 0, -0.12, -40, false));            // grass
     scene.add(mesh('box', mat(0xC9D3D6), SLAB_X1 - SLAB_X0, 0.1, RECT.conference.z + 6 - ROAD_Z + 2, (SLAB_X0 + SLAB_X1) / 2, -0.02,
       (ROAD_Z + 3 + RECT.conference.z + RECT.conference.d / 2 + 2) / 2, false));                       // hospital slab
     // road with dashes and kerbs
-    scene.add(mesh('box', mat(0x3B4652), 260, 0.06, 6, 0, 0.02, ROAD_Z, false));
-    for (let x = -120; x < 120; x += 6) scene.add(mesh('box', mat(0xE9D27A), 2.6, 0.02, 0.22, x, 0.07, ROAD_Z, false));
-    [ROAD_Z - 3.1, ROAD_Z + 3.1].forEach((z) => scene.add(mesh('box', mat(0xD9DDE0), 260, 0.2, 0.25, 0, 0.1, z)));
+    scene.add(mesh('box', mat(0x3B4652), ROAD_X * 2, 0.06, 6, 0, 0.02, ROAD_Z, false));
+    for (let x = -ROAD_X; x < ROAD_X; x += 6) scene.add(mesh('box', mat(0xE9D27A), 2.6, 0.02, 0.22, x, 0.07, ROAD_Z, false));
+    [ROAD_Z - 3.1, ROAD_Z + 3.1].forEach((z) => scene.add(mesh('box', mat(0xD9DDE0), ROAD_X * 2, 0.2, 0.25, 0, 0.1, z)));
+    Object.values(FACS).forEach((F) => {
+      const len = (ROAD_Z - 3) - F.gate.z;
+      scene.add(mesh('box', mat(0x3B4652), 5, 0.07, len, F.x, 0.025, F.gate.z + len / 2, false));
+      for (let z = F.gate.z + 3; z < ROAD_Z - 4; z += 6) scene.add(mesh('box', mat(0xE9D27A), 0.22, 0.02, 2.6, F.x, 0.08, z, false));
+      scene.add(mesh('box', mat(0xC9D3D6), F.w, 0.1, D2 + G + 6, F.x, -0.02, F.z + G / 2 + 1, false));
+      [-1, 1].forEach((s) => scene.add(mesh('box', mat(0x23303B), 0.3, 2.4, 0.3, F.x + s * 3.4, 1.2, F.gate.z + 1.4)));
+      scene.add(mesh('box', mat(0x1E7A3A), 7.2, 1.0, 0.25, F.x, 2.4, F.gate.z + 1.4));
+      const s = textSprite(F.name, { w: 12, size: 40 }); s.position.set(F.x, 5.2, F.z - D2 / 2 - 0.5); scene.add(s);
+    });
 
     Object.keys(RECT).forEach(buildRoom);
     buildSign(); buildTrees(); buildCarPark(); buildLamps();
@@ -295,8 +322,16 @@
       add('box', mat(0x2F4858), 1.0, 1.5, 0.8, 2.6, 0.75, -1.5);                                // anaesthetic machine
       add('box', mat(0x0B2233, { emissive: 0x2E9E5B, emissiveIntensity: 0.6 }), 0.8, 0.5, 0.06, 2.6, 1.7, -1.9);
     }
-    if (id === 'lab') addHit(g, 'lab', 'Lab bench', 0, 0.8, -2.4, r.w - 2, 1.6, 1.4, { stand: new T.Vector3(r.x, 0, r.z - 1.2), face: new T.Vector3(r.x, 0, r.z - 2.4) });
-    if (id === 'radiology') addHit(g, 'ct', 'CT scanner', -1.5, 1.2, -0.4, 3.4, 2.4, 4.4, { stand: new T.Vector3(r.x + 0.6, 0, r.z + 0.4), face: new T.Vector3(r.x - 1.5, 0, r.z - 0.4) });
+    if (id === 'lab') addHit(g, 'lab', 'Lab bench', 0, 0.8, -2.4, r.w - 2, 1.6, 1.4, { site: 'lab', stand: new T.Vector3(r.x, 0, r.z - 1.2), face: new T.Vector3(r.x, 0, r.z - 2.4) });
+    if (id === 'radiology') addHit(g, 'ct', 'CT scanner', -1.5, 1.2, -0.4, 3.4, 2.4, 4.4, { site: 'radiology', stand: new T.Vector3(r.x + 0.6, 0, r.z + 0.4), face: new T.Vector3(r.x - 1.5, 0, r.z - 0.4) });
+    if (id.endsWith('_lab')) {
+      add('box', mat(0xF0F0F0), r.w - 2, 1.0, 1.0, 0, 0.5, -r.d / 2 + 0.9); add('box', mat(0x23303B), r.w - 2, 0.08, 1.05, 0, 1.04, -r.d / 2 + 0.9);
+      for (let i = 0; i < 3; i++) add('cyl', mat([0xD7263D, 0xE9B824, 0x1E5AA8][i]), 0.12, 0.5, 0.12, -2 + i * 1.6, 1.33, -r.d / 2 + 0.9);
+      add('box', mat(0x9AA5AE), 0.7, 0.8, 0.6, 2.6, 1.45, -r.d / 2 + 0.9);
+      if (id === 'ndh_lab') { add('box', mat(0xB9C3CA), 1.2, 2.2, 0.4, r.w / 2 - 1, 1.1, 1.0); add('box', mat(0x2F4858), 0.9, 0.9, 1.8, r.w / 2 - 2.6, 0.45, 1.0); }
+      addHit(g, 'lab', id === 'ndh_lab' ? 'Lab bench and X-ray' : 'Lab bench', 0, 0.8, -r.d / 2 + 0.9, r.w - 2, 1.6, 1.4, { site: id, stand: new T.Vector3(r.x, 0, r.z - r.d / 2 + 2.1), face: new T.Vector3(r.x, 0, r.z - r.d / 2 + 0.9) });
+    }
+    if (id === 'och_room') { add('box', mat(0x8B6B4A), 2.0, 0.9, 0.9, r.w / 2 - 1.6, 0.45, r.d / 2 - 1.4); add('box', mat(0x1E5AA8), 0.8, 0.5, 0.8, -r.w / 2 + 1.2, 0.3, r.d / 2 - 1.2); }
     if (id === 'pharmacy') addHit(g, 'pharmacy', 'Dispensing counter', 0, 0.6, 0.6, r.w - 3, 1.3, 1.0, { stand: new T.Vector3(r.x, 0, r.z - 0.6), face: new T.Vector3(r.x, 0, r.z + 0.6) });
     if (id === 'records') addHit(g, 'records', 'Records desk', 0, 0.6, 0.4, 3.4, 1.2, 1.2, { stand: new T.Vector3(r.x, 0, r.z - 0.6), face: new T.Vector3(r.x, 0, r.z + 0.4) });
     if (id === 'canteen') {
@@ -368,11 +403,14 @@
       let x; let z;
       if (side === 0) { x = -40 - t * 30; z = -20 + rnd('tz', i) * 60; }
       else if (side === 1) { x = SLAB_X1 + 5 + t * 24; z = -20 + rnd('tz', i) * 60; }
-      else if (side === 2) { x = -60 + t * 120; z = ROAD_Z - 8 - rnd('tz', i) * 20; }
+      else if (side === 2) { x = -180 + t * 360; z = ROAD_Z - 8 - rnd('tz', i) * 80; }
       else { x = -60 + t * 120; z = RECT.conference.z + 8 + rnd('tz', i) * 18; }
       spots.push([x, z, 0.8 + rnd('ts', i) * 0.7]);
     }
+    for (let i = 46; i < 120; i++) spots.push([-180 + rnd('tx2', i) * 360, ROAD_Z - 8 - rnd('tz2', i) * 85, 0.8 + rnd('ts2', i) * 0.8]);
+    const clear = (x, z) => Object.values(FACS).every((F) => !(Math.abs(x - F.x) < F.w / 2 + 4 && z < F.gate.z + 4 && z > F.z - D2 / 2 - 6) && !(Math.abs(x - F.x) < 6 && z > F.gate.z && z < ROAD_Z));
     spots.forEach(([x, z, s], i) => {
+      if (!clear(x, z)) return;
       scene.add(mesh('cyl', mat(0x6B4A2F), 0.4 * s, 2.2 * s, 0.4 * s, x, 1.1 * s, z));
       const leaf = i % 3 === 0 ? mesh('cone', mat(0x2F6B3A), 2.6 * s, 3.6 * s, 2.6 * s, x, 3.6 * s, z) : mesh('sph', mat(i % 2 ? 0x3E7D3E : 0x4F8F45), 3 * s, 2.6 * s, 3 * s, x, 3.2 * s, z);
       scene.add(leaf);
@@ -390,7 +428,7 @@
     }
   }
   function buildLamps() {
-    for (let x = -50; x <= 50; x += 14) {
+    for (let x = -190; x <= 190; x += 16) {
       scene.add(mesh('cyl', mat(0x4A5560), 0.18, 4.6, 0.18, x, 2.3, ROAD_Z + 3.6));
       const bulb = mesh('sph', new T.MeshStandardMaterial({ color: 0xFFF2C4, emissive: 0xFFD27A, emissiveIntensity: 0 }), 0.6, 0.4, 0.6, x, 4.6, ROAD_Z + 3.2, false);
       bulb.userData.dyn = true; scene.add(bulb); lamps.push(bulb);
@@ -851,6 +889,11 @@ varying float vPart;`)
       { kind: 'security', at: new T.Vector3(colX(2) - 4.5, 0, ROAD_Z + 4.6), looks: { top: 0x1F2D44, bottom: 0x1F2D44, hair: 'low', vneck: false }, fixed: true },
       { kind: 'security', at: new T.Vector3(colX(0) + 5.5, 0, ROAD_Z + 4.4), looks: { top: 0x1F2D44, bottom: 0x1F2D44, hair: 'low', vneck: false }, fixed: true },
       { kind: 'vendor', at: new T.Vector3(colX(3) - 2, 0, ROAD_Z + 4.8), looks: { skirt: true, topMat: KENTE[1], skirtMat: KENTE[1], bottom: 0x3A2A1A, hair: 'wrap', wrapMat: KENTE[2], basin: true }, fixed: true },
+      { kind: 'security', at: new T.Vector3(FACS.ndh.x - 4.5, 0, FACS.ndh.gate.z + 2.6), looks: { top: 0x1F2D44, bottom: 0x1F2D44, hair: 'low', vneck: false }, fixed: true },
+      { kind: 'relative', pair: 2, at: new T.Vector3(FACS.ndh.x - 6, 0, FACS.ndh.z + D2 / 2 + G / 2), looks: { skirt: true, topMat: KENTE[0], skirtMat: KENTE[0], bottom: 0x3A2A1A, hair: 'wrap', wrapMat: KENTE[2] }, fixed: true },
+      { kind: 'relative', pair: 2, at: new T.Vector3(FACS.ndh.x - 4.7, 0, FACS.ndh.z + D2 / 2 + G / 2), looks: { top: 0xF4F6F8, bottom: 0x23303B, hair: 'low' }, fixed: true },
+      { kind: 'relative', at: new T.Vector3(FACS.och.x + 3, 0, FACS.och.z + D2 / 2 + G / 2), looks: { skirt: true, topMat: KENTE[1], skirtMat: KENTE[1], bottom: 0x3A2A1A, hair: 'wrap', wrapMat: KENTE[0] }, fixed: true },
+      { kind: 'vendor', at: new T.Vector3(FACS.apc.x + 4.5, 0, FACS.apc.gate.z + 2.8), looks: { skirt: true, topMat: KENTE[2], skirtMat: KENTE[2], bottom: 0x3A2A1A, hair: 'wrap', wrapMat: KENTE[1], basin: true }, fixed: true },
       { kind: 'cleaner', looks: { top: 0x2E9E5B, bottom: 0x2E9E5B, hair: 'wrap', wrapMat: mat(0x2E9E5B), mop: true } },
       { kind: 'cleaner', looks: { top: 0x2E9E5B, bottom: 0x2E9E5B, hair: 'low', mop: true } },
       { kind: 'relative', looks: { skirt: true, topMat: KENTE[0], skirtMat: KENTE[0], bottom: 0x3A2A1A, hair: 'wrap', wrapMat: KENTE[0] } },
@@ -871,7 +914,7 @@ varying float vPart;`)
       npcs.push(npc);
     });
     // the talking pair faces each other
-    const pr = npcs.filter((n) => n.pair); if (pr.length === 2) { pr[0].h.root.rotation.y = Math.PI / 2; pr[1].h.root.rotation.y = -Math.PI / 2; }
+    [1, 2].forEach((k) => { const pr = npcs.filter((n) => n.pair === k); if (pr.length === 2) { pr[0].h.root.rotation.y = Math.PI / 2; pr[1].h.root.rotation.y = -Math.PI / 2; } });
     npcs.filter((n) => n.kind === 'security' || n.kind === 'vendor').forEach((n) => { n.h.root.rotation.y = 0; });
   }
   function updateNPC(n, dt, t) {
@@ -915,13 +958,27 @@ varying float vPart;`)
   }
   const BAY = RECT.ambulance;
   const BAY_SLOTS = [0, 1, 2].map((i) => new T.Vector3(BAY.x - 3 + i * 3, 0, BAY.z - 0.6));
-  const FAR_X = 70;
-  function placeAmbulance(a, p, slot) {
-    const park = BAY_SLOTS[slot % 3]; const g = a.g;
-    if (p < 0.82) { const k = p / 0.82; g.position.set(FAR_X + (park.x - FAR_X) * k, 0, ROAD_Z + 1.4); g.rotation.y = 0; }
-    else { const k = (p - 0.82) / 0.18; g.position.set(park.x, 0, ROAD_Z + 1.4 + (park.z - ROAD_Z - 1.4) * k); g.rotation.y = Math.PI / 2; }
-    g.visible = g.position.x < FAR_X - 2;
+  const FAR_X = 70; const ambDest = {};
+  function roadPath(slot, dest, destFac) {
+    const park = BAY_SLOTS[slot % 3]; const road = (x) => new T.Vector3(x, 0, ROAD_Z + 1.4);
+    const pts = [park.clone(), road(park.x)];
+    if (destFac && FACS[destFac]) { const F = FACS[destFac]; pts.push(road(F.x), F.gate.clone()); }
+    else pts.push(road(/centre|Centre|Unit|Hospital/.test(dest || '') ? ROAD_X - 6 : -ROAD_X + 6));
+    return pts;
   }
+  function placeAmbulance(a) {
+    const pts = a.path; const g = a.g; if (!pts || pts.length < 2) return;
+    const segs = []; let total = 0;
+    for (let i = 1; i < pts.length; i++) { const l = pts[i].distanceTo(pts[i - 1]); segs.push(l); total += l; }
+    let d = Math.max(0, Math.min(1, a.p)) * total; let i = 0;
+    while (i < segs.length - 1 && d > segs[i]) { d -= segs[i]; i++; }
+    const A = pts[i]; const B = pts[i + 1]; const k = segs[i] ? d / segs[i] : 0;
+    g.position.set(A.x + (B.x - A.x) * k, 0, A.z + (B.z - A.z) * k);
+    let dx = B.x - A.x; let dz = B.z - A.z; if (a.reverse) { dx = -dx; dz = -dz; }
+    if (Math.hypot(dx, dz) > 0.01) g.rotation.y = Math.atan2(dz, -dx);
+    g.visible = Math.abs(g.position.x) < ROAD_X - 3;
+  }
+
 
   // ---------- update from server state ----------
   function update(st, meIn, myDeptIn) {
@@ -995,15 +1052,22 @@ varying float vPart;`)
 
     const want = new Map();
     (st.fleet || []).forEach((u, i) => {
-      let p = 1; let siren = false;
-      if (u.status === 'out' || u.status === 'transfer') { p = Math.max(0, u.left / u.total); siren = true; }
-      if (u.status === 'back') p = 1 - u.left / u.total;
-      want.set(`u${i}`, { p, siren, slot: i });
+      // progress along the road from the bay (0) to the destination (1)
+      let p = 0; let siren = false; let reverse = false;
+      if (u.status === 'out' || u.status === 'transfer') { p = 1 - Math.max(0, u.left / u.total); siren = true; }
+      if (u.status === 'back') { p = Math.max(0, u.left / u.total); reverse = true; siren = true; }
+      if (u.status !== 'base') ambDest[i] = { dest: u.dest, fac: u.dest_fac };
+      const dd = ambDest[i] || {};
+      want.set(`u${i}`, { p, siren, reverse, path: roadPath(i, dd.dest, dd.fac) });
     });
     let extra = 0;
-    st.patients.forEach((p) => { if (p.stage === 'en_route' && extra < 3) { want.set(`p${p.pid}`, { p: 1 - p.eta / Math.max(1, p.eta_total), siren: true, slot: (st.fleet || []).length ? 1 + extra : extra }); extra++; } });
+    st.patients.forEach((p) => {
+      if (p.stage === 'en_route' && !p.unit && extra < 3) {
+        want.set(`p${p.pid}`, { p: Math.min(1, 1 - p.eta / Math.max(1, p.eta_total)), siren: true, reverse: false, path: roadPath(extra, 'from town', null).reverse() }); extra++;
+      }
+    });
     if (!(st.fleet || []).length) st.patients.filter((p) => p.loc === 'ambulance' && ['arrived', 'transfer'].includes(p.stage)).slice(0, 3).forEach((p, i) => want.set(`p${p.pid}`, { p: 1, siren: false, slot: i }));
-    want.forEach((w, key) => { let a = ambs.get(key); if (!a) { a = makeAmbulance(); ambs.set(key, a); } a.target = w.p; if (a.p === undefined) a.p = w.p; a.siren = w.siren; a.slot = w.slot; });
+    want.forEach((w, key) => { let a = ambs.get(key); if (!a) { a = makeAmbulance(); ambs.set(key, a); } a.target = w.p; if (a.p === undefined || a.reverse !== !!w.reverse) a.p = w.p; a.siren = w.siren; a.reverse = !!w.reverse; a.path = w.path; });
     ambs.forEach((a, key) => { if (!want.has(key)) { scene.remove(a.g); ambs.delete(key); } });
 
     const evDept = st.session ? st.session.dept : st.next && st.next.round_ward;
@@ -1051,16 +1115,21 @@ varying float vPart;`)
       if (stepFrom(g.position, dx * sp, dz * sp)) moving = true;
       const want = Math.atan2(dx, dz); g.rotation.y += angleDiff(want, g.rotation.y) * Math.min(1, dt * 12);
       if (cam.mode === 'walk' && jy > 0.3) cam.yaw += angleDiff(g.rotation.y + Math.PI, cam.yaw) * Math.min(1, dt * 1.2);
-    } else if (ctl.auto.length) {
+    } else if (ctl.auto.length && ctl.auto[0].teleport) {
+      const nx = ctl.auto.shift();
+      travelFade(nx.facName, () => { g.position.set(nx.x, 0, nx.z); if (cam.mode !== 'walk') { cam.target.set(nx.x, 0, nx.z - 4); cam.dist = Math.min(cam.dist, 46); } });
+      ctl.auto = ctl.auto.slice(0); ctl.pauseUntil = performance.now() + 700;
+    } else if (ctl.auto.length && performance.now() > (ctl.pauseUntil || 0)) {
       const nx = ctl.auto[0]; const dx = nx.x - g.position.x; const dz = nx.z - g.position.z; const d = Math.hypot(dx, dz); const sp = 3.4 * dt * speed;
       if (d <= sp) { g.position.set(nx.x, 0, nx.z); ctl.auto.shift(); } else { g.position.x += dx / d * sp; g.position.z += dz / d * sp; g.rotation.y = Math.atan2(dx, dz); moving = true; }
-    } else if (ctl.task && ctl.task.phase === 'walk') startTask(a);
+    } else if (ctl.task && ctl.task.phase === 'walk' && !ctl.auto.length) startTask(a);
     if (ctl.task && ctl.task.phase === 'do') runTask(a, dt);
     const room = roomAt(g.position.x, g.position.z, 0.6);
     if (room && room !== ctl.here) {
       ctl.here = room;
       if (!STAFF_ROOMS.includes(room)) { ctl.appDept = room; myDept = room; if (onRoom) onRoom(room); }
-      if (hooks.onHere) hooks.onHere(room, window.World3D._names[room] || STAFF_NAMES[room] || room);
+      const fName = facOfRoom(room) === 'akt' ? '' : `${FACS[facOfRoom(room)].short}, `;
+      if (hooks.onHere) hooks.onHere(room, fName + (window.World3D._names[room] || STAFF_NAMES[room] || room));
     }
     const now = performance.now();
     if (now - ctl.lastSend > 200 && sendFn) {
@@ -1076,8 +1145,18 @@ varying float vPart;`)
 
   // ---------- Sims-style tasks: walk there, act it out, then the effect ----------
   const POSES = [null, 'sit', 'eat', 'bend', 'wash', 'lie', 'wave'];
+  function facAt(x, z) {
+    const room = roomAt(x, z, 0); if (room) return facOfRoom(room);
+    for (const [f, F] of Object.entries(FACS)) if (Math.abs(x - F.x) < F.w / 2 + 3 && z < F.gate.z + 2 && z > F.z - D2) return f;
+    return 'akt';
+  }
   function routeToPoint(pos, point) {
     const from = roomAt(pos.x, pos.z, 0); const to = roomAt(point.x, point.z, 0);
+    const fa = facAt(pos.x, pos.z); const fb = facAt(point.x, point.z);
+    if (fa !== fb) {
+      const arrive = to ? doorOut(to) : point.clone(); arrive.teleport = true; arrive.facName = fb === 'akt' ? 'Akwaaba Teaching Hospital' : FACS[fb].name;
+      return to ? [arrive, doorIn(to), point.clone()] : [arrive];
+    }
     if (from && from === to) return [point.clone()];
     const pts = []; let P = pos.clone();
     if (from) { pts.push(doorIn(from), doorOut(from)); P = doorOut(from); }
@@ -1217,11 +1296,11 @@ varying float vPart;`)
     items.push({ label: 'Check pulse', icon: 'bi-heart-pulse', run: () => doTask({ stand, face, pose: 'bend', dur: 3, done: () => { needs.calm += 2; } }) });
     return items;
   }
-  function staffQueue(kind) {
+  function staffQueue(kind, site) {
     const st = lastState; if (!st) return [];
     if (kind === 'lab' || kind === 'ct') {
-      const d = kind === 'lab' ? 'lab' : 'radiology'; const out = [];
-      st.patients.forEach((p) => p.pend.filter((t) => t.d === d).forEach((t) => out.push({ p, t })));
+      const d = site || (kind === 'lab' ? 'lab' : 'radiology'); const out = [];
+      st.patients.forEach((p) => p.pend.filter((t) => (t.s || t.d) === d).forEach((t) => out.push({ p, t })));
       return out;
     }
     if (kind === 'pharmacy') return st.patients.filter((p) => p.stage === 'pharmacy').map((p) => ({ p }));
@@ -1302,9 +1381,10 @@ varying float vPart;`)
       items.push({ label: 'Wash up', icon: 'bi-stars', run: () => doTask({ stand: inter.stand, face: inter.face, pose: 'wash', dur: 5, refills: ['hygiene'], tick: (dt) => { needs.hygiene += 20 * dt; } }) });
       items.push({ label: 'Wash hands', icon: 'bi-droplet-half', run: () => doTask({ stand: inter.stand, face: inter.face, pose: 'wash', dur: 3, tick: (dt) => { needs.hygiene += 4 * dt; }, done: () => addMood('hands', 'Clean hands', true, 240) }) });
     } else if (['lab', 'ct', 'pharmacy', 'records'].includes(inter.kind)) {
-      const q = staffQueue(inter.kind);
+      const q = staffQueue(inter.kind, inter.site);
       const need = { lab: 'lab_scientist', ct: 'radiographer', pharmacy: 'pharmacist' }[inter.kind];
-      if (need && role !== need) note = { lab: 'Only lab scientists run tests here.', ct: 'Only radiographers run scans here.', pharmacy: 'Only pharmacists dispense here.' }[inter.kind];
+      const districtLab = inter.site && inter.site.endsWith('_lab') && ['lab_scientist', 'radiographer'].includes(role);
+      if (need && role !== need && !districtLab) note = { lab: 'Only lab scientists run tests here.', ct: 'Only radiographers run scans here.', pharmacy: 'Only pharmacists dispense here.' }[inter.kind];
       else if (!q.length) note = { lab: 'No samples waiting.', ct: 'No scans waiting.', pharmacy: 'No prescriptions waiting.', records: 'Nobody is waiting for a folder.' }[inter.kind];
       else {
         const { p, t } = q[0]; const go = (data, label, icon) => items.push({ label, icon, run: work(() => doTask({ stand: inter.stand, face: inter.face, pose: 'bend', dur: 2.5, done: () => { hooks.act(data); needs.energy -= 1; } })) });
@@ -1333,6 +1413,13 @@ varying float vPart;`)
   function closeMenu() { if (pie) { pie.remove(); pie = null; } }
   const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  let fadeEl = null;
+  function travelFade(name, mid) {
+    if (!fadeEl) { fadeEl = document.createElement('div'); fadeEl.className = 'travel-fade'; container.appendChild(fadeEl); }
+    fadeEl.innerHTML = `<div><i class="bi bi-car-front-fill"></i> Travelling to ${name}</div>`;
+    fadeEl.classList.add('show');
+    setTimeout(() => { mid(); setTimeout(() => fadeEl.classList.remove('show'), 250); }, 420);
+  }
   const angleDiff = (a, b) => { let d = (a - b) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
 
   // ---------- animation loop ----------
@@ -1375,7 +1462,7 @@ varying float vPart;`)
 
     Object.values(slots).forEach((list) => list.forEach((s) => { s.blanketMat.emissive.setHex(s.low ? 0xFF0000 : 0x000000); s.blanketMat.emissiveIntensity = s.low ? 0.35 + Math.sin(t * 8) * 0.35 : 0; }));
     ambs.forEach((a) => {
-      a.p += (a.target - a.p) * Math.min(1, dt * 1.5); placeAmbulance(a, a.p, a.slot);
+      a.p += (a.target - a.p) * Math.min(1, dt * 1.5); placeAmbulance(a);
       const on = a.siren && Math.floor(t * 5) % 2 === 0;
       a.red.emissiveIntensity = a.siren ? (on ? 2.2 : 0.1) : 0; a.blue.emissiveIntensity = a.siren ? (on ? 0.1 : 2.2) : 0;
     });
@@ -1454,7 +1541,7 @@ varying float vPart;`)
   }
   function zoom(f) {
     if (cam.mode === 'walk') cam.walkDist = Math.min(26, Math.max(4, cam.walkDist * f));
-    else cam.dist = Math.min(130, Math.max(16, cam.dist * f));
+    else cam.dist = Math.min(380, Math.max(16, cam.dist * f));
   }
   function bindJoystick(base, knob) {
     let id = null; let cx = 0; let cy = 0; const R = 48;
@@ -1505,8 +1592,8 @@ varying float vPart;`)
       renderer.outputEncoding = T.sRGBEncoding; renderer.toneMapping = T.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.15;
       renderer.shadowMap.enabled = true; renderer.shadowMap.type = small ? T.PCFShadowMap : T.PCFSoftShadowMap;
       el.prepend(renderer.domElement);
-      scene = new T.Scene(); scene.fog = new T.Fog(0x9CCBE8, 110, 240);
-      camera = new T.PerspectiveCamera(45, 1, 0.3, 600);
+      scene = new T.Scene(); scene.fog = new T.Fog(0x9CCBE8, 160, 520);
+      camera = new T.PerspectiveCamera(45, 1, 0.3, 1400);
       hemi = new T.HemisphereLight(0xFFFFFF, 0x5B6B4A, 0.75); scene.add(hemi);
       sun = new T.DirectionalLight(0xFFF4E0, 1); sun.castShadow = true; sun.shadow.mapSize.set(small ? 1024 : 1536, small ? 1024 : 1536);
       Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 220 });
@@ -1531,6 +1618,12 @@ varying float vPart;`)
     },
     zoom,
     cantWork,
+    focus(f) {
+      if (cam.mode === 'walk') return;
+      if (f === 'region') { cam.target.set(0, 0, -30); cam.dist = 330; cam.pitch = 1.05; return; }
+      if (f === 'akt') { cam.target.set(5, 0, rowZ(1) + 3); cam.dist = 74; cam.pitch = 0.92; return; }
+      const F = FACS[f]; if (F) { cam.target.set(F.x, 0, F.z + 2); cam.dist = 44; cam.pitch = 0.9; }
+    },
     event(amount, reason) {
       if (/Unsafe prescription stopped/i.test(reason)) addMood('catch', 'Good catch!', true, 300);
       else if (amount >= 15) addMood('win', 'Saved the day', true, 300);

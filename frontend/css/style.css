@@ -341,3 +341,49 @@ body.world-full-open { overflow: hidden; }
 .creator .swatch.on { box-shadow: 0 0 0 3px var(--scrub); }
 .creator .chip { border-radius: 999px; font-size: .82rem; font-weight: 600; margin: 0 .3rem .3rem 0; }
 @media (max-width: 767.98px) { .sims-hud { top: 46px; left: 8px; width: 180px; } .sims-hud.collapsed { width: auto; } }
+
+/* ---------- full-screen game ---------- */
+body.game-full { overflow: hidden; }
+body.game-full .game-main { display: block; padding: 0; }
+body.game-full .map-wrap { position: fixed; left: 0; right: 0; top: var(--top-h, 96px); bottom: 0; padding: 0; border: 0; border-radius: 0; z-index: 10; background: #9CCBE8; }
+body.game-full .map-wrap .view-bar, body.game-full .legend { display: none; }
+body.game-full .world { height: 100%; min-height: 0; border-radius: 0; }
+body.game-full .side { position: fixed; top: var(--top-h, 96px); right: 0; bottom: 0; width: min(430px, 100vw); z-index: 30; overflow-y: auto;
+  background: #EEF3F4; padding: 44px 12px 16px; transform: translateX(105%); transition: transform .25s ease; box-shadow: -6px 0 24px rgba(0,0,0,.25); }
+body.game-full.panel-open .side { transform: none; }
+.panel-close { display: none; position: absolute; top: 8px; right: 8px; z-index: 2; }
+body.game-full .panel-close { display: inline-flex; }
+.panel-btn { display: none; position: absolute; right: 14px; bottom: 16px; z-index: 4; background: var(--ink); color: #fff; font-weight: 700; border-radius: 999px; padding: .5rem 1rem; box-shadow: 0 3px 10px rgba(0,0,0,.35); }
+.panel-btn:hover { background: var(--scrub); color: #fff; }
+.panel-btn.pulse { animation: pbpulse 1.2s infinite; }
+@keyframes pbpulse { 50% { box-shadow: 0 0 0 8px rgba(233,184,36,.45); } }
+body.game-full .panel-btn { display: inline-flex; align-items: center; gap: .4rem; }
+body.game-full .world-hint { bottom: 70px; }
+#w3dPlan, #w3dFocus { display: none; }
+body.game-full #w3dPlan, body.game-full #w3dFocus { display: inline-block; }
+#w3dFocus { max-width: 120px; font-weight: 600; }
+@media (max-width: 767.98px) {
+  body.game-full .side { top: auto; left: 0; right: 0; width: 100%; height: 74vh; border-radius: 16px 16px 0 0; transform: translateY(105%); box-shadow: 0 -6px 24px rgba(0,0,0,.25); }
+  body.game-full.panel-open .side { transform: none; }
+  .world-tools { flex-wrap: wrap; justify-content: flex-end; max-width: 60%; }
+}
+.travel-fade { position: absolute; inset: 0; background: #0B1630; color: #fff; display: grid; place-items: center; font-weight: 700; z-index: 6; opacity: 0; pointer-events: none; transition: opacity .35s; }
+.travel-fade.show { opacity: 1; }
+
+/* ---------- network, referrals and ethics ---------- */
+.fac-line { font-size: .8rem; font-weight: 700; color: var(--scrub); margin-bottom: .15rem; }
+.fac-line span { font-weight: 500; margin-left: .3rem; }
+.fac-switch { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .55rem; }
+.fac-tag { display: block; font-size: .64rem; font-weight: 700; color: var(--scrub); text-transform: none; }
+.room.fac-room { border-style: dashed; }
+.inbox { background: var(--wall); border-radius: 10px; padding: .7rem .8rem; }
+.inbox-item { border-left: 4px solid var(--scrub); padding: .35rem .55rem; margin-bottom: .4rem; background: #F4F8F9; border-radius: 4px; font-size: .86rem; }
+.inbox-item.good { border-color: var(--tri-green); } .inbox-item.bad { border-color: var(--tri-red); } .inbox-item.update { border-color: #1E5AA8; }
+.inbox-item small { color: #5A6B80; display: block; }
+.refnote { background: #fff; border: 1px solid #E6DCC3; border-radius: 8px; padding: .6rem .7rem; }
+.refform textarea { font-size: .9rem; }
+.pillar { background: #fff; border-radius: 8px; padding: .45rem .6rem; margin-bottom: .35rem; font-size: .86rem; }
+.pillar small { color: #5A6B80; }
+
+.world-room { max-width: calc(100% - 250px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 767.98px) { .world-room { max-width: 46%; font-size: .78rem; } }

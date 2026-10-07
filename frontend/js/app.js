@@ -18,7 +18,17 @@
     ['paramedic', 'Paramedic / EMT', 'bi-truck', 'Ambulance hand-overs and transfers'],
   ];
   const BEDS = { ambulance: 3, emergency: 6, radiology: 2, opd: 4, theatre: 2, maternity: 6, paeds: 6, medical: 8, surgical: 8 };
-  const ROOMS = ['ambulance', 'emergency', 'radiology', 'lab', 'records', 'opd', 'pharmacy', 'theatre', 'maternity', 'paeds', 'medical', 'surgical', 'conference'];
+  const ROOMS = ['ambulance', 'emergency', 'radiology', 'lab', 'records', 'opd', 'pharmacy', 'theatre', 'maternity', 'paeds', 'medical', 'surgical', 'conference',
+    'ndh_casualty', 'ndh_ward', 'ndh_mat', 'ndh_lab', 'apc_opd', 'apc_mat', 'apc_lab', 'och_room', 'och_mat'];
+  const PILLAR_INFO = {
+    autonomy: ['Autonomy', 'Explain, get informed consent, and respect a refusal.'],
+    beneficence: ['Beneficence', 'Act in the patient\'s best interest: refer when needed, close the loop.'],
+    nonmaleficence: ['Non-maleficence', 'First, do no harm: stop unsafe prescriptions and plans.'],
+    justice: ['Justice', 'See the sickest first and never turn away someone who needs care, whoever they are.'],
+    confidentiality: ['Confidentiality', 'Initials and folder numbers in public; records only for the care team.'],
+  };
+  const clinFor = (p) => (['apc', 'och'].includes(p.fac) ? ['doctor', 'student', 'nurse', 'midwife'] : ['doctor', 'student']);
+  const facOf = (dept) => (S.cfg && S.cfg.depts[dept] ? S.cfg.depts[dept].fac : 'akt');
   const CLIN = ['doctor', 'student'];
   const TRIAGERS = ['nurse', 'midwife', 'doctor', 'student', 'paramedic'];
   const CARERS = ['nurse', 'midwife'];
@@ -29,6 +39,7 @@
     inpatient: 'On the ward', transfer: 'Bed confirmed, needs an ambulance', leaving: 'Leaving',
     awaiting_ambulance: 'Needs an ambulance', pickup: 'Ambulance going to collect', boarding: 'No bed: on a trolley',
     transfer_call: 'Needs a receiving centre',
+    consent: 'Needs informed consent', refer_note: 'Needs a referral note', refer_call: 'Ready to call Akwaaba', refer_wait: 'Akwaaba phone ringing',
   };
   const TRIAGE_NAME = { red: 'Emergency', orange: 'Very urgent', yellow: 'Urgent', green: 'Routine' };
 
@@ -141,12 +152,12 @@
     switch (m.t) {
       case 'hello':
         S.me = m.me; S.cfg = m; S.myDept = m.me.dept; S.ticker = m.ticker; S.feed = m.feed;
-        buildMap(); renderMe(); renderPAList(); setupView();
+        buildMap(); renderMe(); renderPAList(); setupView(); renderEthics();
         if (savedLook()) send({ a: 'look', look: savedLook() });
         if (S.ticker[0]) showPA(S.ticker[0], false);
         break;
       case 'state': S.state = m; render(); break;
-      case 'me': S.me = m.me; S.myDept = m.me.dept; renderMe(); break;
+      case 'me': S.me = m.me; S.myDept = m.me.dept; renderMe(); renderEthics(); break;
       case 'xp':
         S.me = m.me; renderMe();
         toast(`${m.amount > 0 ? '+' : ''}${m.amount} XP. ${m.reason}`, m.amount >= 0 ? 'good' : 'bad');
@@ -154,6 +165,11 @@
         break;
       case 'pa': S.ticker.unshift(m); S.ticker = S.ticker.slice(0, 30); showPA(m, true); renderPAList(); worldPA(m.text); break;
       case 'error': toast(m.msg, 'bad'); break;
+      case 'ethics':
+        if (S.me) S.me.ethics = m.ethics; renderEthics();
+        toast(`${PILLAR_INFO[m.pillar][0]} ${m.delta > 0 ? '+' : ''}${m.delta}. ${m.reason}`, m.delta >= 0 ? 'good' : 'bad');
+        break;
+      case 'inbox': toast(`Referral news: ${m.item.text}`, m.item.kind === 'bad' ? 'bad' : 'info'); worldPA(m.item.text); break;
       case 'folder': if (m.patient.pid === S.openPid) { S.folder = m.patient; renderFolder(); } break;
       case 'chat': S.chat.push(m); S.chat = S.chat.slice(-120); renderChat(); if (S.view3d) window.World3D.say(m.from, m.text); break;
       case 'pos': if (S.view3d) window.World3D.positions(m.p); break;
@@ -170,6 +186,13 @@
     const av = $('#meAvatar'); av.textContent = initials(me.name); av.style.setProperty('--rc', `var(--r-${me.role})`);
     const pct = me.next ? Math.round(((me.xp - me.floor) / (me.next - me.floor)) * 100) : 100;
     $('#meXp').style.width = `${Math.max(3, pct)}%`;
+  }
+  function renderEthics() {
+    const e = S.me && S.me.ethics; const el = $('#ethicsPane'); if (!e || !el) return;
+    $('#ethicsScore').textContent = e.score;
+    el.innerHTML = `<p class="small">Your conduct this shift. Every player starts at 100.</p>` + Object.entries(PILLAR_INFO).map(([k, [name, desc]]) =>
+      `<div class="pillar"><div class="d-flex justify-content-between"><b>${name}</b><span class="${e[k] > 0 ? 'ok' : e[k] < 0 ? 'no' : ''}">${e[k] > 0 ? '+' : ''}${e[k]}</span></div><small>${desc}</small></div>`).join('')
+      + '<p class="small text-body-secondary mt-2 mb-0">All patients, facilities and staff in the game are fictional. Treat the cases with the same respect you would give real patients.</p>';
   }
   function showPA(item, flash) {
     const strip = $('#paStrip');
@@ -188,9 +211,10 @@
     ROOMS.forEach((id) => {
       const d = S.cfg.depts[id];
       const b = document.createElement('button');
-      b.type = 'button'; b.className = 'room'; b.dataset.room = id; b.style.gridArea = id;
-      b.setAttribute('aria-label', `Walk to ${d.name}`);
-      b.innerHTML = `<div class="room-h"><i class="bi ${d.icon}" aria-hidden="true"></i><span>${esc(d.name)}</span><span class="count"></span></div><div class="beds"></div><div class="queue-note"></div><div class="people"></div>`;
+      const fac = d.fac || 'akt'; const other = fac !== 'akt';
+      b.type = 'button'; b.className = other ? 'room fac-room' : 'room'; b.dataset.room = id; if (!other) b.style.gridArea = id;
+      b.setAttribute('aria-label', `Go to ${d.name}${other ? `, ${S.cfg.network[fac].name}` : ''}`);
+      b.innerHTML = `<div class="room-h"><i class="bi ${d.icon}" aria-hidden="true"></i><span>${other ? `<small class="fac-tag">${esc(S.cfg.network[fac].short)}</small>` : ''}${esc(d.name)}</span><span class="count"></span></div><div class="beds"></div><div class="queue-note"></div><div class="people"></div>`;
       map.appendChild(b);
     });
   }
@@ -218,6 +242,9 @@
       S.view3d = v === '3d' && can3d && window.World3D.init($('#world'), S.cfg, moveTo, send, worldHooks());
       if (S.view3d && !localStorage.getItem('wl_look_done')) setTimeout(openCreator, 1200);
       wrap.classList.toggle('is-3d', !!S.view3d);
+      document.body.classList.toggle('game-full', !!S.view3d);
+      if (!S.view3d) document.body.classList.remove('panel-open');
+      setTopH();
       $(S.view3d ? '#view3d' : '#viewPlan').checked = true;
       if (window.World3D) window.World3D.setVisible(!!S.view3d);
       localStorage.setItem('wl_view', S.view3d ? '3d' : 'plan');
@@ -231,6 +258,15 @@
       localStorage.setItem('wl_walk', on ? '1' : '');
     });
     $('#w3dLook').addEventListener('click', openCreator);
+    $('#w3dPlan').addEventListener('click', () => apply('plan'));
+    $('#w3dFocus').addEventListener('change', (e) => window.World3D.focus(e.target.value));
+    const togglePanel = (open) => {
+      const on = open ?? !document.body.classList.contains('panel-open');
+      document.body.classList.toggle('panel-open', on); $('#panelBtn').setAttribute('aria-expanded', String(on));
+    };
+    $('#panelBtn').addEventListener('click', () => togglePanel());
+    $('#panelClose').addEventListener('click', () => togglePanel(false));
+    window.addEventListener('resize', setTopH);
     $('#w3dIn').addEventListener('click', () => window.World3D.zoom(0.8));
     $('#w3dOut').addEventListener('click', () => window.World3D.zoom(1.25));
     $('#w3dFull').addEventListener('click', (e) => {
@@ -311,6 +347,20 @@
     const saved = savedLook(); if (saved) send({ a: 'look', look: saved });
   });
 
+  function setTopH() {
+    const top = $('.topbar').getBoundingClientRect().height + $('#paStrip').getBoundingClientRect().height;
+    document.documentElement.style.setProperty('--top-h', `${Math.round(top)}px`);
+  }
+  function updatePanelBadge() {
+    if (!S.view3d || !S.state) return;
+    const st = S.state; const id = S.myDept;
+    let n = st.calls.filter((c) => c.unit === id).length;
+    st.patients.forEach((p) => { if (p.loc === id && actionsFor(p).active) n++; });
+    if (st.session && st.session.dept === id && st.session.phase === 'question') n++;
+    const b = $('#panelBadge'); b.textContent = n; b.classList.toggle('d-none', !n);
+    $('#panelBtn').classList.toggle('pulse', n > 0 && !document.body.classList.contains('panel-open'));
+  }
+
   function worldPA(text) {
     const el = $('#worldPa'); if (!el) return;
     el.textContent = text; el.classList.add('show');
@@ -334,6 +384,7 @@
     const bp = $('#bedPill'); bp.innerHTML = `<i class="bi bi-hospital"></i><b>${free}</b> ward beds free`; bp.classList.toggle('pill-warn', free <= 2);
     $('#clock').innerHTML = `<i class="bi bi-clock"></i>${new Date(st.now * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Accra' })}`;
     renderMap(); renderSession(); renderBoard();
+    updatePanelBadge();
     if (S.view3d && window.World3D) { window.World3D.update(st, S.me, S.myDept); if (!S.hereName) $('#worldRoom').textContent = `You: ${S.cfg.depts[S.myDept]?.name || ''}`; }
     const active = document.activeElement;
     if (!(active && active.closest && active.closest('#deptBody') && active.matches('select'))) renderDept();
@@ -463,8 +514,13 @@
       case 'registration': at(true, btn('Open a folder', A('register'), 'btn-scrub', 'bi-folder-plus')); break;
       case 'arrived': if (role === 'paramedic') at(true, btn('Hand over with vitals', A('handover'), 'btn-scrub', 'bi-arrow-left-right')); break;
       case 'waiting': if (TRIAGERS.includes(role)) at(true, btn('Triage', A('triage'), 'btn-scrub', 'bi-activity')); break;
-      case 'triaged': if (CLIN.includes(role)) at(true, btn('Clerk patient', A('clerk'), 'btn-scrub', 'bi-pencil-square')); break;
-      case 'reviewed': if (CLIN.includes(role)) at(true, btn(p.pend.length ? 'Results pending' : 'Order tests or set plan', A('folder'), 'btn-scrub', 'bi-clipboard2-pulse')); break;
+      case 'triaged': if (clinFor(p).includes(role)) at(true, btn('Clerk patient', A('clerk'), 'btn-scrub', 'bi-pencil-square')); break;
+      case 'consent':
+        if ([...clinFor(p), ...CARERS].includes(role)) at(true, p.consent_wait ? `<span class="hint align-self-center">They asked for time. Ask again in ${p.consent_wait}s.</span>` : btn('Explain and get consent', A('consent'), 'btn-scrub', 'bi-person-check'));
+        break;
+      case 'refer_note': if (clinFor(p).includes(role)) at(true, btn('Write referral note', A('folder'), 'btn-scrub', 'bi-file-earmark-medical')); break;
+      case 'refer_call': if (clinFor(p).includes(role)) at(true, btn('Call Akwaaba to refer', A('refer_call'), 'btn-scrub', 'bi-telephone-outbound')); break;
+      case 'reviewed': if (clinFor(p).includes(role)) at(true, btn(p.pend.length ? 'Results pending' : 'Order tests or set plan', A('folder'), 'btn-scrub', 'bi-clipboard2-pulse')); break;
       case 'pharmacy': if (role === 'pharmacist') at(true, `${btn('Dispense', A('dispense'), 'btn-scrub', 'bi-capsule')} ${btn('Query prescription', A('dispense', 'data-query="1"'), 'btn-outline-danger', 'bi-question-octagon')}`, 'pharmacy'); break;
       case 'care': if (CARERS.includes(role)) at(true, btn('Give care and medicines', A('care'), 'btn-scrub', 'bi-heart-pulse')); break;
       case 'surgery': if (role === 'doctor') at(true, btn('Operate', A('operate'), 'btn-scrub', 'bi-scissors')); break;
@@ -484,12 +540,15 @@
         break;
     }
     if (['pharmacy', 'awaiting_ambulance', 'transfer'].includes(p.stage) && S.myDept === (p.stage === 'pharmacy' ? 'pharmacy' : 'ambulance')) hint = '';
+    if (p.stage === 'awaiting_ambulance' && role !== 'paramedic') hint = p.fac !== 'akt' ? 'Accepted by Akwaaba. Keep monitoring until the ambulance arrives.' : hint;
     const active = out.length > 0;
     const NEEDS = { arrived: 'a paramedic, or the crew will bring them in', waiting: 'a nurse, midwife, doctor or student to triage',
       triaged: 'a doctor or student to clerk', reviewed: 'a doctor or student', pharmacy: 'a pharmacist', care: 'a nurse or midwife',
       surgery: 'a doctor in theatre', transfer: 'a paramedic to dispatch an ambulance',
       awaiting_ambulance: 'a paramedic to dispatch an ambulance', transfer_call: 'a doctor to call a receiving centre',
-      boarding: 'a free bed. Doctors can discharge stable ward patients early' };
+      boarding: 'a free bed. Doctors can discharge stable ward patients early',
+      consent: 'someone to explain the plan and get consent', refer_note: 'a clinician to write the referral note',
+      refer_call: 'a clinician to phone Akwaaba', refer_wait: 'Akwaaba to answer the referral call' };
     if (!active && !hint && NEEDS[p.stage]) hint = `Needs ${NEEDS[p.stage]}.`;
     out.push(btn('Folder', A('folder'), 'btn-outline-secondary', 'bi-folder2-open'));
     return { active, html: out.join('') + (hint ? `<span class="hint align-self-center">${esc(hint)}</span>` : '') };
@@ -498,7 +557,7 @@
   function pcard(p) {
     const acts = actionsFor(p);
     const stageCls = acts.active ? 'stage act' : 'stage';
-    const meta = [`${p.age}${p.sex}`, p.nhis ? 'NHIS' : 'Cash', p.bed ? `Bed ${p.bed}` : '', p.src].filter(Boolean).join(', ');
+    const meta = [p.ref ? `Referred from ${p.ref.from}` : '', `${p.age}${p.sex}`, p.nhis ? 'NHIS' : 'Cash', p.bed ? `Bed ${p.bed}` : '', p.src].filter(Boolean).join(', ');
     let extra = '';
     if (p.stage === 'en_route') extra = `<div class="pmeta">${p.taxi ? 'Coming by taxi' : `${esc(p.unit || 'Ambulance')} arriving`} in ${p.eta}s</div>`;
     if (p.stage === 'awaiting_ambulance') extra = `<div class="pmeta">Collect from: <b>${esc(p.pickup)}</b></div>`;
@@ -528,7 +587,8 @@
       <div class="d-flex justify-content-between gap-2"><div><div class="call-h"><i class="bi bi-telephone-inbound-fill"></i> Referral call, ${c.ring}s</div>
       <div class="pname">${esc(c.from)}</div><div class="pmeta">${esc(c.level)}${c.missed ? ', calling again' : ''}</div></div></div>
       <dl class="sbar"><dt>Situation</dt><dd>${esc(c.name)}, ${c.age}${c.sex}. ${esc(c.s)}</dd><dt>Background</dt><dd>${esc(c.b)}</dd>
-      <dt>Assessment</dt><dd>${esc(c.a)}</dd><dt>Request</dt><dd>${esc(c.r)}</dd></dl>
+      <dt>Assessment</dt><dd>${esc(c.a)}</dd><dt>Request</dt><dd>${esc(c.r)}</dd>${c.tx ? `<dt>Treatment given</dt><dd>${esc(c.tx)}</dd>` : ''}</dl>
+      ${c.player ? `<p class="small mb-1">Referral note by ${esc(c.by)}, folder ${esc(c.folder)}. A colleague is waiting on the line.</p>` : ''}
       <p class="cap-line ${c.space === 0 || (c.o2 && S.state.o2.stock <= 0) ? 'no' : ''}">${spaceLine}${o2Line}.</p>
       ${canAnswer ? `<div class="advice"><p class="small fw-semibold mb-1">Advice to give if you accept</p>${S.state.advice.map((a, i) => `<div class="form-check"><input class="form-check-input" type="checkbox" id="adv_${c.cid}_${i}" data-adv="${c.cid}" value="${i}" ${adv.has(i) ? 'checked' : ''}><label class="form-check-label" for="adv_${c.cid}_${i}">${esc(a)}</label></div>`).join('')}</div>
       <div class="pcard-actions">${btn('Accept', `data-call="${c.cid}" data-choice="accept"`, 'btn-scrub', 'bi-check-lg')}
@@ -542,19 +602,26 @@
   function renderDept() {
     const st = S.state; const id = S.myDept; const d = S.cfg.depts[id]; const role = myRole();
     const here = st.players.filter((p) => p.dept === id);
-    $('#deptHead').innerHTML = `<h2><i class="bi ${d.icon}" aria-hidden="true"></i>${esc(d.name)}</h2><p>${esc(d.blurb)}</p>
-      <div class="here-list">${here.slice(0, 12).map((p) => `<span>${esc(p.name)}, ${esc(S.cfg.roles[p.role].name)}</span>`).join('')}${here.length > 12 ? `<span>+${here.length - 12} more</span>` : ''}</div>`;
+    const myFac = d.fac || 'akt'; const net = S.cfg.network;
+    setHTML($('#deptHead'), `<div class="fac-line"><i class="bi bi-building"></i> ${esc(net[myFac].name)} <span class="text-body-secondary">${esc(net[myFac].level)}</span></div>
+      <h2><i class="bi ${d.icon}" aria-hidden="true"></i>${esc(d.name)}</h2><p>${esc(d.blurb)}</p>
+      <div class="fac-switch">${Object.entries(net).map(([k, f]) => `<button type="button" class="btn btn-sm ${k === myFac ? 'btn-dark' : 'btn-outline-secondary'}" data-goto="${f.entry}">${esc(f.short)}</button>`).join('')}</div>
+      <div class="here-list">${here.slice(0, 12).map((p) => `<span>${esc(p.name)}, ${esc(S.cfg.roles[p.role].name)}</span>`).join('')}${here.length > 12 ? `<span>+${here.length - 12} more</span>` : ''}</div>`);
     $('#confBox').classList.toggle('d-none', id !== 'conference');
     if (id === 'conference' && !S.renderedConf) { S.renderedConf = true; send({ a: 'my_cases' }); renderFeed(); }
     if (id !== 'conference') S.renderedConf = false;
 
     let html = st.calls.filter((c) => c.unit === id).map(callCard).join('');
+    const inbox = (st.inbox && st.inbox[myFac]) || [];
+    if (inbox.length && myFac !== 'akt') {
+      html += `<div class="inbox"><h3 class="side-h"><i class="bi bi-envelope-paper"></i> Referral updates</h3>${inbox.slice(0, 5).map((m) => `<div class="inbox-item ${m.kind}"><small>${new Date(m.ts * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Accra' })}, ${esc(m.by || 'Akwaaba')}</small><div>${esc(m.text)}</div>${m.kind === 'good' ? `<button class="btn btn-sm btn-link p-0" data-ask="${m.id}">Ask Akwaaba for an update</button>` : ''}</div>`).join('')}</div>`;
+    }
     const sort = (a, b) => ({ red: 0, orange: 1, yellow: 2, green: 3 }[a.tri] ?? 4) - ({ red: 0, orange: 1, yellow: 2, green: 3 }[b.tri] ?? 4) || a.stab - b.stab;
-    if (id === 'lab' || id === 'radiology') {
+    if (id === 'lab' || id === 'radiology' || id.endsWith('_lab')) {
       const rows = [];
-      st.patients.forEach((p) => p.pend.filter((t) => t.d === id).forEach((t) => rows.push({ p, t })));
-      const canRun = role === (id === 'lab' ? 'lab_scientist' : 'radiographer');
-      html += `<h3 class="side-h">${id === 'lab' ? 'Samples waiting' : 'Imaging requests'}</h3>`;
+      st.patients.forEach((p) => p.pend.filter((t) => t.s === id).forEach((t) => rows.push({ p, t })));
+      const canRun = id.endsWith('_lab') ? ['lab_scientist', 'radiographer'].includes(role) : role === (id === 'lab' ? 'lab_scientist' : 'radiographer');
+      html += `<h3 class="side-h">${id === 'radiology' ? 'Imaging requests' : 'Samples and X-rays waiting'}</h3>`;
       if (st.power) html += '<div class="empty">No power. Requests are queued until the generator is up.</div>';
       html += rows.length ? rows.sort((a, b) => b.t.w - a.t.w).map(({ p, t }) => `<div class="qrow"><div class="grow"><b>${esc(t.n)}</b><small>${esc(p.name)}, ${p.age}${p.sex}, waiting ${mmss(t.w)}</small></div>
         ${canRun ? btn(id === 'lab' ? 'Run test' : 'Do scan', `data-a="run_test" data-pid="${p.pid}" data-test="${t.k}" ${st.power ? 'disabled' : ''}`, 'btn-scrub') : ''}</div>`).join('')
@@ -568,7 +635,7 @@
       html += '<h3 class="side-h mt-2">Prescriptions to check</h3>';
       html += list.length ? list.map(pcard).join('') : '<div class="empty">No prescriptions waiting. Read each one against the diagnosis; query anything unsafe.</div>';
     } else if (id === 'ambulance') {
-      const list = st.patients.filter((p) => p.loc === 'ambulance' || p.stage === 'transfer').sort((a, b) => ['awaiting_ambulance', 'transfer', 'arrived'].indexOf(b.stage) - ['awaiting_ambulance', 'transfer', 'arrived'].indexOf(a.stage));
+      const list = st.patients.filter((p) => p.loc === 'ambulance' || ['transfer', 'awaiting_ambulance', 'pickup'].includes(p.stage)).sort((a, b) => ['awaiting_ambulance', 'transfer', 'arrived'].indexOf(b.stage) - ['awaiting_ambulance', 'transfer', 'arrived'].indexOf(a.stage));
       const status = { base: 'At base, ready', out: 'Going to collect', back: 'Returning with a patient', transfer: 'On a transfer' };
       html += '<h3 class="side-h">Fleet</h3>' + st.fleet.map((u) => `<div class="qrow"><i class="bi bi-truck-front-fill fs-5 ${u.status === 'base' ? 'ok' : ''}"></i><div class="grow"><b>${esc(u.name)}</b><small>${status[u.status]}${u.dest ? `: ${esc(u.dest)}` : ''}${u.status !== 'base' ? `, ${u.left}s` : ''}</small></div></div>`).join('');
       html += '<h3 class="side-h mt-2">Jobs</h3>';
@@ -579,15 +646,31 @@
       const list = st.patients.filter((p) => p.loc === id && p.stage !== 'en_route').sort(sort);
       html += list.length ? list.map(pcard).join('') : `<div class="empty">No patients in ${esc(d.name)} right now.</div>`;
     }
-    $('#deptBody').innerHTML = html;
+    setHTML($('#deptBody'), html);
   }
+  function setHTML(el, html) { if (el._h !== html) { el.innerHTML = html; el._h = html; } }
 
   document.addEventListener('change', (e) => {
     const el = e.target.closest('[data-adv]'); if (!el) return;
     const set = S.advice[el.dataset.adv] || (S.advice[el.dataset.adv] = new Set());
     el.checked ? set.add(Number(el.value)) : set.delete(Number(el.value));
   });
+  // If the panel redraws between finger-down and finger-up, the browser drops the click. Replay it.
+  let downInfo = null;
+  document.addEventListener('pointerdown', (e) => {
+    const el = e.target.closest('[data-a],[data-goto],[data-ask],[data-call]');
+    downInfo = el ? { el, x: e.clientX, y: e.clientY, t: Date.now() } : null;
+  }, true);
+  document.addEventListener('pointerup', (e) => {
+    const d = downInfo; downInfo = null;
+    if (!d || d.el.isConnected || Date.now() - d.t > 700 || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 12) return;
+    const sel = ['data-a', 'data-goto', 'data-ask', 'data-call'].map((k) => (d.el.hasAttribute(k) ? `[${k}="${d.el.getAttribute(k)}"]` : '')).join('')
+      + (d.el.dataset.pid ? `[data-pid="${d.el.dataset.pid}"]` : '') + (d.el.dataset.choice ? `[data-choice="${d.el.dataset.choice}"]` : '') + (d.el.dataset.test ? `[data-test="${d.el.dataset.test}"]` : '');
+    const fresh = document.querySelector(sel); if (fresh && !fresh.disabled) fresh.click();
+  }, true);
   document.addEventListener('click', (e) => {
+    const go = e.target.closest('[data-goto]'); if (go) { moveTo(go.dataset.goto); return; }
+    const ask = e.target.closest('[data-ask]'); if (ask) { send({ a: 'ask_update', id: Number(ask.dataset.ask) }); ask.disabled = true; return; }
     const call = e.target.closest('[data-call]');
     if (call) { send({ a: 'answer_call', cid: call.dataset.call, choice: call.dataset.choice, advice: [...(S.advice[call.dataset.call] || [])] }); call.disabled = true; return; }
     const b = e.target.closest('[data-a]'); if (!b || b.disabled) return;
@@ -621,8 +704,8 @@
     const role = myRole(); const here = S.myDept === p.loc; const dr = draft(p.pid);
     const canAct = CLIN.includes(role) && here && p.stage === 'reviewed';
     $('#folderNo').textContent = `Folder ${p.folder}`;
-    $('#folderTitle').textContent = p.name;
-    $('#folderSub').textContent = [`${p.age} years, ${p.sex === 'F' ? 'female' : 'male'}`, p.nhis ? `NHIS ${p.nhis_no}` : 'No NHIS card, paying cash', p.src, p.gone ? 'Has left the hospital' : STAGE[p.stage]].filter(Boolean).join(', ');
+    $('#folderTitle').textContent = p.fullname || p.name;
+    $('#folderSub').textContent = [S.cfg.network[p.fac || 'akt'].name, `${p.age} years, ${p.sex === 'F' ? 'female' : 'male'}`, p.nhis ? `NHIS ${p.nhis_no}` : 'No NHIS card, paying cash', p.src, p.gone ? 'Has left the hospital' : STAGE[p.stage]].filter(Boolean).join(', ');
     let h = '<div class="sheet">';
     h += `<h3>Presenting complaint</h3><p>${esc(p.cc)}</p>`;
     h += '<h3>Vital signs</h3>';
@@ -674,10 +757,32 @@
     }
     if (p.rx_all && p.rx_all.length) h += `<h3>Medicines on the prescription</h3><ul class="rx">${p.rx_all.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`;
     if (p.team.length) h += `<h3>Care team</h3><p>${esc(p.team.join(', '))}</p>`;
+    if (p.consent) h += `<h3>Consent</h3><p>${p.consent.guardian ? 'Guardian' : 'Patient'} gave informed consent to ${esc(p.consent.by)} after the diagnosis, plan, risks and alternatives were explained.</p>`;
+    if (p.ref_note) {
+      const n = p.ref_note;
+      h += `<h3>Referral note</h3><div class="refnote"><p class="small mb-1">From ${esc(n.fac)} by ${esc(n.by)}. Patient: ${esc(n.patient)}.</p>
+        <dl class="sbar"><dt>Situation</dt><dd>${esc(n.s)}</dd><dt>Background</dt><dd>${esc(n.b)}</dd><dt>Assessment</dt><dd>${esc(n.a)}</dd><dt>Recommendation</dt><dd>${esc(n.r)}</dd>${n.tx ? `<dt>Treatment given</dt><dd>${esc(n.tx)}</dd>` : ''}</dl></div>`;
+    }
+    if (p.stage === 'refer_note' && clinFor(p).includes(role) && here) {
+      const dn = S.drafts['ref_' + p.pid] || {};
+      h += `<h3>Write the referral note (SBAR)</h3><form id="refForm" class="refform">
+        <p class="small text-body-secondary">Identify the patient by initials and folder number only (${esc(p.name)}, folder ${esc(p.folder)}). Names are removed automatically.</p>
+        ${[['s', 'Situation: what is happening now'], ['b', 'Background: relevant history'], ['a', 'Assessment: findings and your working diagnosis'], ['r', 'Recommendation: what you are asking Akwaaba to do'], ['tx', 'Treatment given before transfer']].map(([k, ph]) => `<textarea class="form-control mb-2" rows="2" data-ref="${k}" placeholder="${ph}">${esc(dn[k] || '')}</textarea>`).join('')}
+        <button class="btn btn-scrub" type="submit"><i class="bi bi-send"></i> Save note</button></form>`;
+    }
+    if (p.ref && !p.ref.updated && facOf(S.myDept) === 'akt' && [...CLIN, ...CARERS].includes(role)) {
+      h += `<h3>Update ${esc(p.ref.from)}</h3><form id="updForm"><textarea class="form-control mb-2" rows="2" id="updText" placeholder="Diagnosis, what you have done, and the plan. Use initials only.">${esc(S.drafts['upd_' + p.pid] || '')}</textarea>
+        <button class="btn btn-outline-dark btn-sm" type="submit"><i class="bi bi-reply"></i> Send update to the referring facility</button></form>`;
+    }
     h += `<h3>Timeline</h3><ul class="timeline">${p.log.slice().reverse().map((l) => `<li><time>${new Date(l.ts * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Accra' })}</time>${esc(l.text)}</li>`).join('')}</ul>`;
     $('#folderBody').innerHTML = h + '</div>';
   }
 
+  $('#folderBody').addEventListener('input', (e) => {
+    const p = S.folder; if (!p) return; const el = e.target;
+    if (el.dataset.ref) { const d = S.drafts['ref_' + p.pid] || (S.drafts['ref_' + p.pid] = {}); d[el.dataset.ref] = el.value; }
+    if (el.id === 'updText') S.drafts['upd_' + p.pid] = el.value;
+  });
   $('#folderBody').addEventListener('change', (e) => {
     const p = S.folder; if (!p) return; const dr = draft(p.pid); const el = e.target;
     if (el.id.startsWith('t_')) el.checked ? dr.tests.add(el.value) : dr.tests.delete(el.value);
@@ -687,6 +792,8 @@
   });
   $('#folderBody').addEventListener('submit', (e) => {
     e.preventDefault(); const p = S.folder; if (!p) return; const dr = draft(p.pid);
+    if (e.target.id === 'refForm') { send({ a: 'refer_note', pid: p.pid, note: S.drafts['ref_' + p.pid] || {} }); return; }
+    if (e.target.id === 'updForm') { send({ a: 'ref_update', pid: p.pid, text: S.drafts['upd_' + p.pid] || '' }); return; }
     if (e.target.id === 'orderForm') {
       if (!dr.tests.size) { toast('Tick at least one test.', 'bad'); return; }
       send({ a: 'order', pid: p.pid, tests: [...dr.tests] }); dr.tests.clear();

@@ -53,7 +53,7 @@ The admin dashboard refreshes every 15 seconds and is protected by `WARDLIFE_ADM
 
 ## 3D hospital and Sims-style play
 
-The game opens in a 3D hospital built with three.js (`frontend/js/world3d.js`).
+The game opens full screen in a 3D world built with three.js (the panel slides in from the side, or up from the bottom on phones) (`frontend/js/world3d.js`).
 
 **Your character.** On first entry you design your character: skin tone, hair (low cut, short, bun, braids, headwrap, bald), hair colour, build, height, uniform colour and glasses. Everyone sees your look. Change it any time with the person button.
 
@@ -73,6 +73,42 @@ The game opens in a 3D hospital built with three.js (`frontend/js/world3d.js`).
 **Hospital life.** Relatives in kente, cleaners, security and a pure water seller fill the corridors. Ambulances drive in with sirens, beds flash red when a patient deteriorates, and the sky follows Accra time. **Floor plan** switches to the flat view; phones without WebGL get it automatically.
 
 Needs and moods are saved in each player's own browser.
+
+## The health network
+
+The game is a regional health system, not a single hospital. Four fictional facilities sit on one road network:
+
+| Facility | Level | Rooms | What it can do |
+|---|---|---|---|
+| Akwaaba Teaching Hospital | Teaching hospital (referral centre) | Every department | All tests including CT, surgery, specialist transfers |
+| Nkwanta District Hospital | District hospital | Casualty & OPD, ward, maternity, lab & X-ray | Blood tests and plain X-rays; admits moderate cases; refers the rest |
+| Asafo Polyclinic | Polyclinic | Consulting rooms, maternity, lab | Basic blood tests; nurses and midwives may clerk and decide |
+| Odumase CHPS Compound | CHPS compound | Consulting room, delivery room | Bedside tests only; nurse- and midwife-led |
+
+Use the facility buttons in the panel (or walk down the road) to work at any of them. New patients arrive wherever staff are on shift. When nobody is at a facility, its duty staff still phone Akwaaba with referrals.
+
+**The referral loop**, played by real people at both ends:
+1. At the referring facility the clinician decides **Refer to Akwaaba**. Scoring is by level of care: a district hospital that admits a moderate case it can manage scores better than one that refers it.
+2. **Consent**: the clinician explains and obtains informed consent (a guardian for children). Patients may ask for time; the decision is respected and asked again later.
+3. **Referral note** in SBAR form (situation, background, assessment, recommendation, plus treatment given).
+4. **Phone call** to Akwaaba. The call rings in the right unit; a doctor, nurse in charge or midwife in charge accepts, advises local care, finds another hospital, or declines.
+5. **Ambulance**: an Akwaaba paramedic dispatches a unit, which drives along the real roads to the facility, collects the patient and brings them back to the bay.
+6. **Closing the loop**: the Akwaaba team sends an update to the referring facility's inbox. If nobody does within a few minutes, the duty doctor sends a short one.
+
+## Ethics pillars
+
+Every player has an ethics record for the shift, shown in the **Ethics** tab:
+
+- **Autonomy**: informed consent before surgery and before any referral; respect a refusal and ask again later.
+- **Beneficence**: refer patients who need a higher level of care, and close the loop with the referring team.
+- **Non-maleficence**: stop unsafe prescriptions; adverse events count against the whole care team.
+- **Justice**: see the sickest first, whatever their ability to pay; don't turn away or decline patients who need care.
+- **Confidentiality** (built into the rules, not just scored):
+  - Patients are shown everywhere public (map, announcements, calls, ward rounds, presentations, chat) by **initials, age and sex**, with the folder number for identification.
+  - Full names appear only inside the patient's folder, which opens only for the care team, people working in the patient's room, the pharmacist dispensing for them, the lab dealing with their samples, or the ambulance crew carrying them.
+  - Any patient name or NHIS number typed into chat, a referral note or an update is replaced with initials, and the writer is reminded.
+
+All patients, facilities and staff are fictional.
 
 ## Characters and animations
 

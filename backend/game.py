@@ -5,6 +5,7 @@ When nobody in a role is online, a slower "duty" NPC does that step so
 the hospital keeps moving for small groups.
 """
 import asyncio
+import re
 import json
 import random
 import time
@@ -12,6 +13,7 @@ import traceback
 from collections import Counter, deque
 
 import db
+from content import (FAC_CLINICIANS, FAC_DISPOS, FAC_LAB, NETWORK, correct_dispo, fac_room, tests_at)
 from content import (ADVICE, CASE_BY_ID, CASES, DEFAULT_DEPT, DEPTS, DISPOSITIONS, FACILITIES, FLEET, HOSPITAL,
                      NAMES_F, NAMES_M, OXYGEN_START, REDIRECT_HOSPITALS, REFERRING, ROLES, SCENES,
                      SPECIALIST_CENTRES, SURNAMES, TESTS, UNIT_CAP, WARD_BEDS, WARD_OF, WARDS, rank_for)
@@ -27,7 +29,9 @@ ROUND_EVERY, MEETING_EVERY = 420, 900
 Q_SECONDS, REVEAL_SECONDS, SUMMARY_SECONDS = 25, 8, 15
 ACTIONS = {"move", "folder", "register", "handover", "triage", "clerk", "order", "run_test", "decide",
            "dispense", "care", "operate", "transfer", "obs", "answer", "chat", "present", "endorse", "my_cases",
-           "answer_call", "dispatch", "call_centre", "order_o2", "early_discharge", "pos", "look"}
+           "answer_call", "dispatch", "call_centre", "order_o2", "early_discharge", "pos", "look",
+           "consent", "refer_note", "refer_call", "ref_update", "ask_update"}
+PILLARS = ("autonomy", "beneficence", "nonmaleficence", "justice", "confidentiality")
 CALL_ROLES = ("doctor", "midwife", "nurse")
 
 
@@ -62,12 +66,15 @@ class Engine:
         self.peak = int(db.meta_get("peak_online") or 0)
         self.calls = {}
         self.call_seq = 0
+        self.fac_online = {}
         self.fleet = [{"id": i, "name": n, "status": "base", "until": 0.0, "total": 0.0, "pid": None, "dest": ""}
                       for i, n in enumerate(FLEET)]
         self.o2 = OXYGEN_START
         self.o2_due = 0.0
         self.o2_empty_since = None
         self.o2_low_warned = False
+        self.inbox = {f: deque(maxlen=20) for f in NETWORK}   # referral news for each facility
+        self.msg_seq = 0
 
     # ---------- messaging ----------
     def to_user(self, uid, payload):
@@ -111,7 +118,7 @@ class Engine:
         lvl, title, floor, nxt = rank_for(p["role"], p["xp"])
         return {"uid": uid, "name": p["name"], "role": p["role"], "role_name": ROLES[p["role"]]["name"],
                 "inst": p["inst"], "xp": p["xp"], "level": lvl, "title": title, "floor": floor, "next": nxt,
-                "dept": p["dept"]}
+                "dept": p["dept"], "fac": DEPTS[p["dept"]]["fac"], "ethics": self.ethics_view(uid)}
 
     async def connect(self, ws, user):
         uid = user["id"]
@@ -119,7 +126,8 @@ class Engine:
         if uid not in self.players:
             self.players[uid] = {"uid": uid, "name": user["name"], "role": user["role"], "inst": user["institution"],
                                  "xp": user["xp"], "dept": DEFAULT_DEPT[user["role"]], "socks": 0,
-                                 "pos": None, "pos_at": 0.0, "look": None}
+                                 "pos": None, "pos_at": 0.0, "look": None,
+                                 "ethics": {k: 0 for k in PILLARS}}
             if len(self.players) <= 60:
                 self.pa(f"{user['name']} ({ROLES[user['role']]['name']}) has started a shift.", "join")
             if not self.patients:
@@ -131,6 +139,8 @@ class Engine:
             db.meta_set("peak_online", self.peak)
         self.to_user(uid, {"t": "hello", "me": self.me_view(uid), "hospital": HOSPITAL, "ticker": list(self.ticker),
                            "feed": list(self.feed), "depts": DEPTS, "tests": TESTS, "dispositions": DISPOSITIONS,
+                           "network": NETWORK, "fac_dispos": FAC_DISPOS, "fac_tests": {f: (sorted(v) if v else None) for f, v in
+                                                                                      {k: tests_at(k) for k in NETWORK}.items()},
                            "roles": {k: {"name": v["name"], "icon": v["icon"]} for k, v in ROLES.items()}})
         await self.flush()
 
@@ -179,7 +189,7 @@ class Engine:
         self.to_user(uid, {"t": "xp", "amount": amount, "reason": reason, "me": self.me_view(uid)})
         lvl, title, _, _ = rank_for(p["role"], new_xp)
         if lvl > before:
-            self.pa(f"{p['name']} has been promoted to {title}.", "promo")
+            self.pa(f"{self.ini(p)} has been promoted to {title}.", "promo")
 
     def touch(self, p):
         p["rev"] += 1
@@ -212,6 +222,65 @@ class Engine:
             return f"Go to {DEPTS[p['location']]['name']} first."
         return None
 
+    # ---------- privacy, facilities and ethics ----------
+    @staticmethod
+    def initials(p):
+        return ".".join(w[0] for w in p["name"].split() if w) + "."
+
+    def ini(self, p):
+        """How a patient is named anywhere public: initials, age and sex only."""
+        return f"{self.initials(p)} ({p['age']}{p['sex']})"
+
+    def fac_of_player(self, uid):
+        return DEPTS[self.players[uid]["dept"]]["fac"]
+
+    def clin(self, p):
+        return FAC_CLINICIANS[p.get("fac", "akt")]
+
+    def ethics_view(self, uid):
+        e = self.players[uid].get("ethics") or {k: 0 for k in PILLARS}
+        return {**e, "score": max(0, min(150, 100 + sum(e.values())))}
+
+    def ethic(self, uid, pillar, delta, reason):
+        if uid not in self.players:
+            return
+        e = self.players[uid]["ethics"]; e[pillar] += delta
+        self.to_user(uid, {"t": "ethics", "pillar": pillar, "delta": delta, "reason": reason, "ethics": self.ethics_view(uid)})
+
+    def can_see(self, uid, p):
+        """Records are for the care team only: people caring for the patient or working where they are."""
+        me = self.players[uid]
+        if uid in p["team"] or me["dept"] == p["location"]:
+            return True
+        if me["role"] == "pharmacist" and p["stage"] == "pharmacy":
+            return True
+        if me["role"] in ("lab_scientist", "radiographer") and any(x["status"] == "pending" and x.get("site") == me["dept"] for x in p["tests"].values()):
+            return True
+        if me["role"] == "paramedic" and p["stage"] in ("awaiting_ambulance", "pickup", "en_route", "arrived", "transfer"):
+            return True
+        return False
+
+    def post_inbox(self, fac, text, patient=None, kind="info", by="", pid=None):
+        self.msg_seq += 1
+        item = {"id": self.msg_seq, "fac": fac, "text": text, "patient": patient, "kind": kind, "by": by, "pid": pid, "ts": time.time()}
+        self.inbox[fac].appendleft(item)
+        for u, pl in self.players.items():
+            if DEPTS[pl["dept"]]["fac"] == fac:
+                self.to_user(u, {"t": "inbox", "item": item})
+
+    def redact(self, text, uid=None, where="chat"):
+        """Replace any patient's real name with initials. Returns the cleaned text and whether a name was found."""
+        found = False
+        for p in self.patients.values():
+            parts = p["name"].split()
+            for token in [p["name"], *[w for w in parts if len(w) > 3]] + ([p["nhis_no"]] if p.get("nhis_no") else []):
+                if token and re.search(r"\b" + re.escape(token) + r"\b", text, re.I):
+                    text = re.sub(r"\b" + re.escape(token) + r"\b", self.initials(p) if token != p.get("nhis_no") else "[NHIS no.]", text, flags=re.I)
+                    found = True
+        if found and uid is not None:
+            self.ethic(uid, "confidentiality", -2, f"Patient identifiers removed from your {where}. Use initials or the folder number.")
+        return text, found
+
     def pat(self, msg):
         return self.patients.get(str(msg.get("pid", "")))
 
@@ -235,9 +304,29 @@ class Engine:
                 "dispo": None, "prescription": [], "bad_given": [], "team": {}, "log": [], "bed": None,
                 "obs_at": 0, "eta": None, "eta_total": None, "discharge_at": None, "pickup": None,
                 "unit": None, "taxi": False, "notes_pre": [], "refer_centre": None, "board_ward": None,
-                "o2_t": 0, "call_at": 0}
+                "o2_t": 0, "call_at": 0, "fac": "akt", "ref": None, "ref_note": None, "after_consent": None,
+                "consent_retry": 0, "consent": None}
+
+    def staffed_facilities(self):
+        return sorted({DEPTS[p["dept"]]["fac"] for p in self.players.values()} - {"akt"})
+
+    def spawn_at(self, fac, t):
+        case = random.choice(CASES)
+        p = self.make_patient(case, "walk_in", t)
+        p["fac"] = fac; p["location"] = fac_room(fac, case["dept"]); p["source"] = "Walked in"
+        p["folder"] = f"{fac.upper()}/{random.randint(10, 99)}/{random.randint(1000, 9999)}"
+        self.plog(p, f"Arrived at {NETWORK[fac]['name']}, {DEPTS[p['location']]['name']}.")
+        self.patients[p["pid"]] = p
+        self.pa(f"New patient at {NETWORK[fac]['short']}: {self.ini(p)}, {case['complaint'].lower()}.", "info")
+        self.stat("arrivals")
 
     def spawn(self, t):
+        staffed = self.staffed_facilities()
+        if staffed and random.random() < 0.55:
+            fac = random.choice(staffed)
+            if sum(1 for p in self.patients.values() if p.get("fac") == fac) < 5:
+                self.spawn_at(fac, t)
+                return
         case = random.choice(CASES)
         if random.random() < 0.3 or case["arrival"] == ["referral"]:
             self.new_call(t, case if case["arrival"] == ["referral"] else None)
@@ -264,7 +353,8 @@ class Engine:
             pool = [c for c in CASES if "referral" in c["arrival"]]
             green = [c for c in pool if c["triage"] == "green"]
             case = random.choice(green) if green and random.random() < 0.2 else random.choice([c for c in pool if c["triage"] != "green"])
-        facility, level = random.choice(REFERRING)
+        staffed = {NETWORK[f]["name"] for f in self.staffed_facilities()}
+        facility, level = random.choice([r for r in REFERRING if r[0] not in staffed] or REFERRING)
         p = self.make_patient(case, "referral", t)
         p.update(source=f"Referral from {facility}", pickup=facility)
         unit = case["dept"] if case["dept"] in UNIT_CAP else "emergency"
@@ -284,17 +374,59 @@ class Engine:
         p, case = c["p"], c["p"]["case"]
         need = {"discharge": "review", "theatre": "surgery", "refer_out": "specialist care"}.get(case["dispo"], "admission")
         return {"cid": c["cid"], "from": c["facility"], "level": c["level"], "unit": c["unit"],
-                "ring": int(t - c["created"]), "missed": c["missed"], "name": p["name"], "age": p["age"], "sex": p["sex"],
+                "ring": int(t - c["created"]), "missed": c["missed"], "name": self.initials(p), "age": p["age"], "sex": p["sex"],
                 "s": case["complaint"] + ".", "b": case["history"].split(". ")[0].rstrip(".") + ".",
                 "a": ", ".join(f"{k} {v}" for k, v in case["vitals"].items()),
                 "r": f"Requesting transfer for {need}.", "o2": bool(case.get("needs_o2")),
-                "space": self.unit_space(c["unit"]), "cap": UNIT_CAP.get(c["unit"], 6)}
+                "space": self.unit_space(c["unit"]), "cap": UNIT_CAP.get(c["unit"], 6),
+                **({"s": p["ref_note"]["s"], "b": p["ref_note"]["b"], "a": p["ref_note"]["a"], "r": p["ref_note"]["r"],
+                    "tx": p["ref_note"].get("tx", ""), "by": p["ref_note"]["by"], "player": True, "folder": p["folder"]}
+                   if c.get("player") and p.get("ref_note") else {})}
 
-    def close_call(self, c):
+    def close_call(self, c, outcome=None, other=None, by=""):
         self.calls.pop(c["cid"], None)
+        if not c.get("player") or not outcome:
+            return
+        p = c["p"]; fac = c["from_fac"]; who = by or "The Akwaaba duty doctor"
+        if p["pid"] not in self.patients:
+            return
+        if outcome == "local":
+            if fac == "ndh":
+                p["dispo"] = "admit_local"; self.admit_local(p)
+            else:
+                self.set_stage(p, "refer_call")
+            self.plog(p, f"{who} at Akwaaba advised managing locally.")
+            self.post_inbox(fac, f"{who} advised managing {self.ini(p)} locally. Call again if they get worse.", self.ini(p), "bad", who, p["pid"])
+        elif outcome == "redirect":
+            self.set_stage(p, "leaving")
+            self.plog(p, f"Akwaaba had no space; {who} arranged a bed at {other}. Transferred there.")
+            self.post_inbox(fac, f"Akwaaba had no space. {who} arranged a bed for {self.ini(p)} at {other}; they have collected the patient.", self.ini(p), "info", who, p["pid"])
+            self.award(c.get("from_uid"), 4, f"{self.ini(p)} placed at {other}")
+        elif outcome == "decline":
+            self.set_stage(p, "refer_call")
+            self.plog(p, f"Referral declined by {who}.")
+            self.post_inbox(fac, f"Akwaaba declined the referral for {self.ini(p)}. Call again, or escalate to your medical superintendent.", self.ini(p), "bad", who, p["pid"])
 
     def accept_call(self, c, uid, advice, t):
         p = c["p"]
+        if c.get("player"):
+            who = self.who(uid, "The Akwaaba duty doctor")
+            good = [i for i in advice if ADVICE[i][1]]
+            p["notes_pre"].append(f"Referral from {c['facility']} accepted by {who}"
+                                  + (f" with advice: {'; '.join(ADVICE[i][0].lower() for i in good)}." if good else "."))
+            p["ref"] = {"fac": c["from_fac"], "uid": c.get("from_uid"), "facility": c["facility"], "accepted_by": who, "at": t, "updated": False}
+            p["pickup"] = c["facility"]
+            self.join_team(p, uid)
+            self.set_stage(p, "awaiting_ambulance")
+            self.plog(p, f"Referral accepted by {who} at Akwaaba. Waiting for the Akwaaba ambulance.")
+            self.pa(f"Referral accepted: dispatch an ambulance to {c['facility']} for {self.ini(p)}.", "amb")
+            self.post_inbox(c["from_fac"], f"{who} at Akwaaba accepted {self.ini(p)}. An ambulance is being dispatched. Keep treating and monitoring until it arrives.", self.ini(p), "good", who, p["pid"])
+            self.award(c.get("from_uid"), 6, f"Akwaaba accepted your referral of {self.ini(p)}")
+            if c.get("appropriate"):
+                self.ethic(c.get("from_uid"), "beneficence", 1, "You referred a patient who needed a higher level of care.")
+            self.stat("referrals_in")
+            self.close_call(c)
+            return
         good = [i for i in advice if ADVICE[i][1]]
         taxi = any(not ADVICE[i][1] for i in advice)
         p["notes_pre"].append(f"Referral accepted by {self.who(uid, 'the duty doctor')}"
@@ -320,13 +452,14 @@ class Engine:
         o2_ok = not c["p"]["case"].get("needs_o2") or self.o2 > 0
         if not c["appropriate"]:
             self.pa(f"The duty doctor advised {c['facility']} to manage their patient locally.", "info")
-            self.close_call(c)
+            self.close_call(c, "local")
         elif has_room and o2_ok:
             self.accept_call(c, None, [0, 1, 2], t)
         else:
-            self.pa(f"The duty doctor redirected the referral from {c['facility']} to {random.choice(REDIRECT_HOSPITALS)}.", "info")
+            other = random.choice(REDIRECT_HOSPITALS)
+            self.pa(f"The duty doctor redirected the referral from {c['facility']} to {other}.", "info")
             self.stat("redirected")
-            self.close_call(c)
+            self.close_call(c, "redirect", other)
 
     # ---------- ambulances ----------
     def free_unit(self):
@@ -343,7 +476,7 @@ class Engine:
             p["unit"] = u["name"]
             self.set_stage(p, "pickup")
             self.plog(p, f"{u['name']} dispatched to {p['pickup']} by {who}.")
-            self.award(uid, 6, f"Dispatched {u['name']} for {p['name']}")
+            self.award(uid, 6, f"Dispatched {u['name']} for {self.ini(p)}")
         else:  # transfer out
             u.update(status="transfer", until=t + 40, total=40, pid=None, dest=p["refer_centre"])
             self.plog(p, f"{u['name']} dispatched to {p['refer_centre']} by {who}.")
@@ -358,7 +491,7 @@ class Engine:
                 back = random.uniform(20, 35)
                 u.update(status="back", until=t + back, total=back)
                 if p:
-                    p.update(eta=t + back, eta_total=back)
+                    p.update(eta=t + back, eta_total=back, location="ambulance", fac="akt")
                     self.set_stage(p, "en_route")
                     self.plog(p, f"Collected from {p['pickup']} by {u['name']}.")
             elif u["status"] in ("back", "transfer") and t >= u["until"]:
@@ -374,7 +507,7 @@ class Engine:
                 p["board_ward"] = ward
                 self.set_stage(p, "boarding")
                 self.plog(p, f"No bed on {DEPTS[ward]['name']}. Waiting on a trolley in {DEPTS[p['location']]['name']}.")
-                self.pa(f"No bed on {DEPTS[ward]['name']}: {p['name']} is waiting on a trolley.", "bad")
+                self.pa(f"No bed on {DEPTS[ward]['name']}: {self.ini(p)} is waiting on a trolley.", "bad")
                 self.stat("no_bed")
             return False
         taken = {x["bed"] for x in self.patients.values() if x["location"] == ward and x["stage"] == "inpatient"}
@@ -417,9 +550,9 @@ class Engine:
 
     def deteriorate(self, p):
         p["remove"] = True
-        self.pa(f"Code red: {p['name']} deteriorated and was moved to ICU.", "bad")
+        self.pa(f"Code red: {self.ini(p)} deteriorated and was moved to ICU.", "bad")
         for uid in p["team"]:
-            self.award(uid, -8, f"{p['name']} deteriorated")
+            self.award(uid, -8, f"{self.ini(p)} deteriorated")
         self.stat("deteriorations")
 
     def complete_test(self, p, key, uid):
@@ -430,7 +563,7 @@ class Engine:
         who = self.who(uid, {"lab": "Duty lab staff", "radiology": "Duty radiographer"}.get(dept, "Bedside test"))
         self.plog(p, f"{TESTS[key]['name']} reported by {who}.")
         if uid is not None:
-            self.award(uid, 4, f"{TESTS[key]['name']} for {p['name']}")
+            self.award(uid, 4, f"{TESTS[key]['name']} for {self.ini(p)}")
 
     def route(self, p):
         """Send the patient where the plan says once care is given."""
@@ -442,20 +575,85 @@ class Engine:
         elif dispo in WARD_OF:
             self.admit(p, WARD_OF[dispo])
         elif dispo == "theatre":
-            p["location"] = "theatre"
-            self.set_stage(p, "surgery")
-            self.plog(p, "Moved to theatre.")
-            self.pa(f"Theatre: {p['name']} is waiting for surgery.", "event")
+            p["location"] = "theatre"; p["after_consent"] = "surgery"
+            self.set_stage(p, "consent")
+            self.plog(p, "Moved to theatre. Consent is needed before surgery.")
+            self.pa(f"Theatre: {self.ini(p)} is waiting for surgery.", "event")
+        elif dispo == "refer_up":
+            p["after_consent"] = "refer_note"
+            self.set_stage(p, "consent")
+            self.plog(p, "Needs referral to Akwaaba. Explain and get consent first.")
+        elif dispo == "admit_local":
+            self.admit_local(p)
         elif dispo == "refer_out":
             self.set_stage(p, "transfer_call")
             self.plog(p, "Needs a receiving centre. A doctor must call and confirm a bed before transfer.")
+
+    def admit_local(self, p):
+        p.update(location="ndh_ward", bed=random.randint(1, 12), discharge_at=time.time() + 300)
+        self.set_stage(p, "inpatient")
+        self.plog(p, "Admitted to the Nkwanta district ward.")
+        self.stat("admissions")
+
+    def do_consent(self, p, uid):
+        t = time.time()
+        child = p["age"] < 18
+        if uid is not None and not p.get("consent_refused_once") and random.random() < 0.12:
+            p["consent_refused_once"] = True; p["consent_retry"] = t + 15
+            self.plog(p, ("The guardian" if child else "The patient") + " declined for now after hearing the plan. Decision respected and documented.")
+            self.ethic(uid, "autonomy", 1, "They said no for now. You respected the decision; give them time and offer again.")
+            self.touch(p)
+            return "Consent declined for now. Respect it, answer their questions, and ask again shortly."
+        p["consent"] = {"by": self.who(uid, "the duty clinician"), "at": t, "guardian": child}
+        self.join_team(p, uid)
+        self.plog(p, f"{self.who(uid, 'The duty clinician')} explained the diagnosis, the plan, the risks and alternatives; "
+                     + ("the guardian" if child else "the patient") + " gave consent.")
+        if uid is not None:
+            self.award(uid, 4, f"Consent for {self.ini(p)}")
+            self.ethic(uid, "autonomy", 1, "You explained and obtained informed consent.")
+        self.set_stage(p, p["after_consent"] or "care")
+        return None
+
+    def write_note(self, p, uid, note):
+        c = p["case"]
+        p["ref_note"] = {**note, "by": self.who(uid, "Duty clinician"), "fac": NETWORK[p["fac"]]["name"], "at": time.time(),
+                         "patient": f"{self.initials(p)}, {p['age']}{p['sex']}, folder {p['folder']}"}
+        self.join_team(p, uid)
+        self.plog(p, f"Referral note written by {self.who(uid, 'the duty clinician')}.")
+        self.set_stage(p, "refer_call")
+
+    def place_call(self, p, uid):
+        c = p["case"]
+        self.call_seq += 1
+        cid = f"C{self.call_seq}"
+        unit = c["dept"] if c["dept"] in UNIT_CAP else "emergency"
+        self.calls[cid] = {"cid": cid, "p": p, "facility": NETWORK[p["fac"]]["name"], "level": NETWORK[p["fac"]]["level"],
+                           "unit": unit, "created": time.time(), "missed": False,
+                           "appropriate": correct_dispo(c, p["fac"]) == "refer_up", "redirect_tried": 0,
+                           "player": True, "from_uid": uid, "from_fac": p["fac"]}
+        self.join_team(p, uid)
+        self.set_stage(p, "refer_wait")
+        self.plog(p, f"{self.who(uid, 'The duty clinician')} called Akwaaba {DEPTS[unit]['name']} to refer.")
+        self.pa(f"Referral call from {NETWORK[p['fac']]['name']} for {DEPTS[unit]['name']}. Pick up the phone there.", "call")
+        self.stat("referral_calls")
+
+    def send_update(self, p, uid, text):
+        ref = p["ref"]
+        who = self.who(uid, "The Akwaaba duty doctor")
+        ref["updated"] = True
+        self.post_inbox(ref["fac"], text, self.ini(p), "update", f"{who}, Akwaaba", p["pid"])
+        self.plog(p, f"Update sent to {ref['facility']} by {who}.")
+        if uid is not None:
+            self.award(uid, 6, f"Update to {ref['facility']} on {self.ini(p)}")
+            self.ethic(uid, "beneficence", 1, "You closed the loop with the referring facility.")
+        self.award(ref.get("uid"), 3, f"Akwaaba updated you on {self.ini(p)}")
 
     # Each do_* can be called by a player (uid) or by the duty NPC (uid=None).
     def do_register(self, p, uid):
         p["location"] = p["case"]["dept"]
         self.set_stage(p, "waiting")
         self.plog(p, f"Folder opened by {self.who(uid, 'Records staff')}. Sent to {DEPTS[p['location']]['name']}.")
-        self.award(uid, 3, f"Folder for {p['name']}")
+        self.award(uid, 3, f"Folder for {self.ini(p)}")
 
     def do_handover(self, p, uid):
         p["location"] = p["case"]["dept"]
@@ -464,32 +662,48 @@ class Engine:
             self.set_stage(p, "triaged")
             self.join_team(p, uid)
             self.plog(p, f"Handed over with vitals by {self.who(uid, '')}. Moved to {DEPTS[p['location']]['name']}.")
-            self.award(uid, 8, f"Handover of {p['name']}")
+            self.award(uid, 8, f"Handover of {self.ini(p)}")
         else:
             self.set_stage(p, "waiting")
             self.plog(p, f"Ambulance crew moved the patient to {DEPTS[p['location']]['name']}.")
 
+    def sicker_waiting(self, p):
+        rank = {"red": 0, "orange": 1, "yellow": 2, "green": 3}
+        now = time.time()
+        for o in self.patients.values():
+            if o is p or o["location"] != p["location"] or o["stage"] not in ("waiting", "triaged"):
+                continue
+            if now - o["since"] > 20 and (rank[o["case"]["triage"]] + 1 < rank[p["case"]["triage"]] or o["stability"] < 35):
+                return o
+        return None
+
     def do_triage(self, p, uid):
+        if uid is not None and self.sicker_waiting(p):
+            self.ethic(uid, "justice", -2, "A sicker patient was waiting longer in this room. See the sickest first, whoever they are.")
         p["triaged"] = True
         self.set_stage(p, "triaged")
         self.join_team(p, uid)
         self.plog(p, f"Triaged {p['case']['triage']} by {self.who(uid, 'the duty nurse')}.")
         bonus = 2 if uid in self.players and self.players[uid]["role"] in CARERS else 0
-        self.award(uid, 6 + bonus, f"Triage of {p['name']}")
+        self.award(uid, 6 + bonus, f"Triage of {self.ini(p)}")
 
     def do_clerk(self, p, uid):
+        if uid is not None and self.sicker_waiting(p):
+            self.ethic(uid, "justice", -2, "A sicker patient was waiting longer in this room. See the sickest first, whoever they are.")
         p["clerked"] = True
         self.set_stage(p, "reviewed")
         self.join_team(p, uid)
         self.plog(p, f"Clerked by {self.who(uid, 'the duty doctor')}.")
-        self.award(uid, 6, f"Clerking {p['name']}")
+        self.award(uid, 6, f"Clerking {self.ini(p)}")
 
     def order_tests(self, p, keys, uid):
         t = time.time()
         added = []
+        avail = tests_at(p.get("fac", "akt"))
         for k in keys:
-            if k in TESTS and k not in p["tests"]:
-                p["tests"][k] = {"status": "pending", "at": t, "result": None}
+            if k in TESTS and k not in p["tests"] and (avail is None or k in avail):
+                site = FAC_LAB[p.get("fac", "akt")].get(TESTS[k]["dept"]) if TESTS[k]["dept"] != "bedside" else None
+                p["tests"][k] = {"status": "pending", "at": t, "result": None, "site": site}
                 added.append(k)
                 if TESTS[k]["dept"] == "bedside":
                     self.complete_test(p, k, None)
@@ -510,23 +724,33 @@ class Engine:
             elif opt["good"] is False and picked:
                 xp -= 6
             plan.append({"t": opt["t"], "chosen": picked, "good": opt["good"]})
+        avail = tests_at(p.get("fac", "akt"))
         ordered, key, useful = set(p["tests"]), set(c["key_tests"]), set(c.get("useful_tests", []))
+        if avail is not None:
+            key &= avail
         missed, extra = key - ordered, ordered - key - useful
         xp += 3 * len(key & ordered) - 4 * len(missed) - 2 * len(extra)
-        xp += 8 if dispo == c["dispo"] else -6
+        right = correct_dispo(c, p.get("fac", "akt"))
+        xp += 8 if dispo == right else -6
         p["feedback"] = {
             "by": self.who(uid, "Duty doctor"), "xp": xp,
             "dx_ok": dx == c["dx"], "dx_given": c["dx_options"][dx], "dx_correct": c["dx_options"][c["dx"]],
             "plan": plan, "missed": [TESTS[k]["name"] for k in missed], "extra": [TESTS[k]["name"] for k in extra],
-            "dispo_ok": dispo == c["dispo"], "dispo_given": DISPOSITIONS[dispo], "dispo_correct": DISPOSITIONS[c["dispo"]],
+            "dispo_ok": dispo == right, "dispo_given": DISPOSITIONS[dispo], "dispo_correct": DISPOSITIONS[right],
             "learning": c["learning"], "notes": list(p["notes_pre"])}
         p.update(dx_chosen=dx, dispo=dispo, prescription=[i for i in chosen if c["mgmt"][i]["drug"]])
         self.join_team(p, uid)
         for member in p["team"]:
             self.remember(member, p)
         self.plog(p, f"Plan set by {self.who(uid, 'the duty doctor')}: {DISPOSITIONS[dispo]}.")
-        self.set_stage(p, "pharmacy" if p["prescription"] else "care")
-        self.award(uid, xp, f"Managing {p['name']}")
+        if p.get("fac", "akt") != "akt" and p["prescription"]:
+            # small facilities dispense from their own dispensary without a pharmacist check
+            p["bad_given"] = [i for i in p["prescription"] if c["mgmt"][i]["good"] is False]
+            self.plog(p, "Medicines issued from the facility dispensary.")
+            self.set_stage(p, "care")
+        else:
+            self.set_stage(p, "pharmacy" if p["prescription"] else "care")
+        self.award(uid, xp, f"Managing {self.ini(p)}")
         self.stat("decisions")
 
     def do_dispense(self, p, uid, query):
@@ -539,15 +763,16 @@ class Engine:
                 p["prescription"] = [i for i in p["prescription"] if i not in bad]
                 p["stability"] = min(100.0, p["stability"] + 10)
                 p["feedback"]["notes"].append(f"{who} queried the prescription and stopped: {names}.")
-                self.pa(f"Good catch: {who} stopped an unsafe prescription for {p['name']}.", "good")
-                self.award(uid, 15, f"Unsafe prescription stopped for {p['name']}")
+                self.pa(f"Good catch: {who} stopped an unsafe prescription for {self.ini(p)}.", "good")
+                self.award(uid, 15, f"Unsafe prescription stopped for {self.ini(p)}")
+                self.ethic(uid, "nonmaleficence", 2, "You stopped an unsafe prescription: first, do no harm.")
                 self.stat("prescriptions_stopped")
                 bad = []
             else:
                 p["feedback"]["notes"].append(f"{who} queried the prescription; it was safe to dispense.")
                 self.award(uid, -3, "Query on a safe prescription")
         elif uid is not None:
-            self.award(uid, -4 if bad else 5, f"Dispensing for {p['name']}")
+            self.award(uid, -4 if bad else 5, f"Dispensing for {self.ini(p)}")
         p["bad_given"] = bad
         self.join_team(p, uid)
         self.plog(p, f"Medicines dispensed by {who}.")
@@ -559,20 +784,21 @@ class Engine:
             names = "; ".join(c["mgmt"][i]["t"] for i in p["bad_given"])
             p["stability"] = max(1.0, p["stability"] - 20)
             p["feedback"]["notes"].append(f"Adverse event: {names} was given.")
-            self.pa(f"Adverse event on {p['name']}: an unsafe treatment was given.", "bad")
+            self.pa(f"Adverse event on {self.ini(p)}: an unsafe treatment was given.", "bad")
             for member in p["team"]:
-                self.award(member, -3, f"Adverse event for {p['name']}")
+                self.award(member, -3, f"Adverse event for {self.ini(p)}")
+                self.ethic(member, "nonmaleficence", -2, "An unsafe treatment reached your patient.")
             p["bad_given"] = []
         self.join_team(p, uid)
         self.plog(p, f"Care and medicines given by {self.who(uid, 'the duty nurse')}.")
-        self.award(uid, 6, f"Care for {p['name']}")
+        self.award(uid, 6, f"Care for {self.ini(p)}")
         self.route(p)
 
     def do_operate(self, p, uid):
         ward = p["case"].get("post_op", "surgical")
         self.join_team(p, uid)
         self.plog(p, f"Operated on by {self.who(uid, 'the duty surgeon')}.")
-        self.award(uid, 12, f"Surgery for {p['name']}")
+        self.award(uid, 12, f"Surgery for {self.ini(p)}")
         self.stat("operations")
         self.admit(p, ward)
 
@@ -580,22 +806,23 @@ class Engine:
         p["location"] = "ambulance"
         self.set_stage(p, "leaving")
         self.plog(p, f"Transferred out by {self.who(uid, 'the duty ambulance crew')}.")
-        self.award(uid, 8, f"Transfer of {p['name']}")
+        self.award(uid, 8, f"Transfer of {self.ini(p)}")
         self.stat("referrals_out")
 
     def npc_doctor(self, p, t):
         """Duty doctor for when no doctor or student is on shift."""
         c = p["case"]
         if not p["tests"]:
-            self.order_tests(p, c["key_tests"], None)
+            avail = tests_at(p.get("fac", "akt"))
+            self.order_tests(p, [k for k in c["key_tests"] if avail is None or k in avail] or ["rbs"], None)
         if all(x["status"] == "done" for x in p["tests"].values()):
             chosen = [i for i, m in enumerate(c["mgmt"]) if m["good"]]
-            self.decide(p, None, c["dx"], chosen, c["dispo"])
+            self.decide(p, None, c["dx"], chosen, correct_dispo(c, p.get("fac", "akt")))
 
     def remember(self, uid, p):
         cases = self.treated.setdefault(uid, {})
         if p["pid"] not in cases:
-            cases[p["pid"]] = {"pid": p["pid"], "name": p["name"], "age": p["age"], "sex": p["sex"],
+            cases[p["pid"]] = {"pid": p["pid"], "name": self.initials(p), "age": p["age"], "sex": p["sex"],
                                "case_id": p["case"]["id"], "title": p["case"]["title"], "presented": False}
             while len(cases) > 12:
                 cases.pop(next(iter(cases)))
@@ -666,6 +893,16 @@ class Engine:
         if not self.players:
             return
         online = self.roles_online()
+        self.fac_online = {}
+        for pl in self.players.values():
+            self.fac_online.setdefault(DEPTS[pl["dept"]]["fac"], Counter())[pl["role"]] += 1
+        for p in self.patients.values():
+            ref = p.get("ref")
+            if ref and not ref["updated"] and t - ref["at"] > 150 and p["stage"] in ("inpatient", "leaving", "surgery", "consent", "care", "pharmacy"):
+                outcome = {"inpatient": f"admitted to {DEPTS[p['location']]['name']}", "leaving": "treated and discharged",
+                           "surgery": "in theatre", "consent": "being prepared for theatre"}.get(p["stage"], "being treated")
+                title = p["case"]["title"] if p["feedback"] else "assessment ongoing"
+                self.send_update(p, None, f"Update on {self.ini(p)}: {title}; {outcome}. Thank you for the referral.")
         if t >= self.next_spawn:
             n = len(self.players)
             cap = max(4, min(30, 3 + 2 * n))
@@ -705,11 +942,11 @@ class Engine:
                     p["stability"] = max(5.0, p["stability"] - 20)
                     self.set_stage(p, "waiting")
                     self.plog(p, f"Arrived by taxi at {DEPTS[p['location']]['name']} with no escort, and worse.")
-                    self.pa(f"{p['name']} arrived by taxi with no escort and is worse.", "bad")
+                    self.pa(f"{self.ini(p)} arrived by taxi with no escort and is worse.", "bad")
                 else:
                     self.set_stage(p, "arrived")
                     self.plog(p, "Ambulance arrived at the bay.")
-                    self.pa(f"Ambulance has arrived with {p['name']}. Hand-over needed at the Ambulance bay.", "amb")
+                    self.pa(f"Ambulance has arrived with {self.ini(p)}. Hand-over needed at the Ambulance bay.", "amb")
             return
         if st == "pickup":
             return
@@ -736,6 +973,20 @@ class Engine:
         if st == "boarding":
             self.admit(p, p["board_ward"])
             return
+        fon = self.fac_online.get(p.get("fac", "akt"), Counter())
+        clin_on = any(fon[r] for r in self.clin(p))
+        if st == "consent" and t >= p.get("consent_retry", 0) and age > (60 if clin_on or any(fon[r] for r in CARERS) else 15):
+            self.do_consent(p, None)
+            return
+        if st == "refer_note" and age > (60 if clin_on else 15):
+            c = p["case"]
+            self.write_note(p, None, {"s": c["complaint"] + ".", "b": c["history"].split(". ")[0] + ".",
+                                      "a": ", ".join(f"{k} {v}" for k, v in c["vitals"].items()), "r": "Please accept for review and admission.",
+                                      "tx": "First-line treatment started."})
+            return
+        if st == "refer_call" and age > (60 if clin_on else 12):
+            self.place_call(p, None)
+            return
         if st == "transfer_call" and age > (120 if online["doctor"] else 45):
             centre = next(n for n, kinds in SPECIALIST_CENTRES.items() if p["case"].get("refer_specialty") in kinds)
             p["refer_centre"] = centre
@@ -746,22 +997,22 @@ class Engine:
             self.do_handover(p, None)
         elif st == "registration" and age > 15:
             self.do_register(p, None)
-        elif st == "waiting" and not any_online(TRIAGERS) and age > 30:
+        elif st == "waiting" and not any(fon[r] for r in TRIAGERS) and age > 30:
             self.do_triage(p, None)
-        elif st == "triaged" and not any_online(CLINICIANS) and age > 40:
+        elif st == "triaged" and not clin_on and age > 40:
             self.do_clerk(p, None)
         elif st == "reviewed":
             if t >= self.power_until:
                 for k, test in p["tests"].items():
                     if test["status"] == "pending":
                         role = "lab_scientist" if TESTS[k]["dept"] == "lab" else "radiographer"
-                        if t - test["at"] > (90 if online[role] else 20):
+                        if t - test["at"] > (90 if fon[role] else 20):
                             self.complete_test(p, k, None)
-            if not any_online(CLINICIANS) and age > 40:
+            if not clin_on and age > 40:
                 self.npc_doctor(p, t)
         elif st == "pharmacy" and age > (90 if online["pharmacist"] else 20):
             self.do_dispense(p, None, False)
-        elif st == "care" and age > (90 if any_online(CARERS) else 25):
+        elif st == "care" and age > (90 if any(fon[r] for r in CARERS) else 25):
             self.do_care(p, None)
         elif st == "surgery" and age > (120 if online["doctor"] else 35):
             self.do_operate(p, None)
@@ -796,7 +1047,7 @@ class Engine:
             c = p["case"]
             if p["location"] == ward and p["stage"] == "inpatient" and c["id"] not in seen:
                 seen.add(c["id"])
-                qs.append(dict(c["round_q"], label=f"Bed {p['bed']}, {p['name']} ({p['age']}{p['sex']}), {c['title']}"))
+                qs.append(dict(c["round_q"], label=f"Bed {p['bed']}, {self.ini(p)}, {c['title']}"))
         qs = qs[:3]
         pool = [c for c in CASES if c["id"] not in seen and
                 (WARD_OF.get(c["dispo"]) == ward or c.get("post_op") == ward)]
@@ -877,11 +1128,12 @@ class Engine:
     # ---------- views ----------
     def lview(self, p, t):
         c = p["case"]
-        v = {"pid": p["pid"], "name": p["name"], "age": p["age"], "sex": p["sex"], "loc": p["location"],
+        v = {"pid": p["pid"], "name": self.initials(p), "age": p["age"], "sex": p["sex"], "loc": p["location"],
+             "fac": p.get("fac", "akt"), "fno": p["folder"],
              "stage": p["stage"], "stab": max(0, round(p["stability"])), "tri": c["triage"] if p["triaged"] else None,
              "cc": c["complaint"], "mode": p["mode"], "src": p["source"], "rev": p["rev"], "nhis": p["nhis"],
              "bed": p["bed"], "team": list(p["team"].values()),
-             "pend": [{"k": k, "n": TESTS[k]["name"], "d": TESTS[k]["dept"], "w": int(t - x["at"])}
+             "pend": [{"k": k, "n": TESTS[k]["name"], "d": TESTS[k]["dept"], "s": x.get("site") or TESTS[k]["dept"], "w": int(t - x["at"])}
                       for k, x in p["tests"].items() if x["status"] == "pending"]}
         if p["stage"] == "en_route":
             v.update(eta=max(0, round(p["eta"] - t)), eta_total=round(p["eta_total"]))
@@ -903,6 +1155,10 @@ class Engine:
             v["o2"] = True
         if p["stage"] == "inpatient":
             v["ward_secs"] = int(t - p["since"])
+        if p.get("ref"):
+            v["ref"] = {"from": p["ref"]["facility"], "updated": p["ref"]["updated"]}
+        if p.get("consent_retry", 0) > t:
+            v["consent_wait"] = int(p["consent_retry"] - t)
         return v
 
     def fview(self, p, t):
@@ -918,7 +1174,8 @@ class Engine:
                   "mgmt_options": [m["t"] for m in c["mgmt"]] if p["clerked"] else None,
                   "feedback": p["feedback"],
                   "rx_all": [c["mgmt"][i]["t"] for i in p["prescription"]] if p["feedback"] else None,
-                  "log": p["log"][-25:]})
+                  "log": p["log"][-25:], "fullname": p["name"], "ref_note": p.get("ref_note"),
+                  "consent": p.get("consent"), "after_consent": p.get("after_consent")})
         return v
 
     def state_payload(self, t):
@@ -929,7 +1186,9 @@ class Engine:
                 "players": players, "session": self.session_view(t),
                 "calls": [self.call_view(c, t) for c in self.calls.values()],
                 "fleet": [{"name": u["name"], "status": u["status"], "left": max(0, round(u["until"] - t)),
-                           "total": round(u["total"]) or 1, "dest": u["dest"]} for u in self.fleet],
+                           "total": round(u["total"]) or 1, "dest": u["dest"],
+                           "dest_fac": next((k for k, f in NETWORK.items() if f["name"] == u["dest"]), None)} for u in self.fleet],
+                "inbox": {f: list(q)[:12] for f, q in self.inbox.items()},
                 "o2": {"stock": self.o2, "due_in": max(0, round(self.o2_due - t)) if self.o2_due else None},
                 "beds": {w: {"used": self.ward_used(w), "total": n} for w, n in WARD_BEDS.items()},
                 "units": {u: {"free": self.unit_space(u), "total": n} for u, n in UNIT_CAP.items()},
@@ -950,6 +1209,8 @@ class Engine:
         p = self.pat(m)
         if not p:
             return "That patient has left the hospital."
+        if not self.can_see(uid, p):
+            return "Confidentiality: you can only open the records of patients you are caring for, or patients in the room you are in."
         self.to_user(uid, {"t": "folder", "patient": self.fview(p, time.time())})
 
     def act_register(self, uid, m):
@@ -975,18 +1236,23 @@ class Engine:
 
     def act_clerk(self, uid, m):
         p = self.pat(m)
-        err = self.check(uid, p, CLINICIANS, "triaged")
+        err = self.check(uid, p, self.clin(p) if p else CLINICIANS, "triaged")
         if err:
             return err
         self.do_clerk(p, uid)
 
     def act_order(self, uid, m):
         p = self.pat(m)
-        err = self.check(uid, p, CLINICIANS, "reviewed")
+        err = self.check(uid, p, self.clin(p) if p else CLINICIANS, "reviewed")
         if err:
             return err
         keys = [k for k in (m.get("tests") or []) if isinstance(k, str)][:12]
-        if not self.order_tests(p, keys, uid):
+        avail = tests_at(p.get("fac", "akt"))
+        missing = [TESTS[k]["name"] for k in keys if k in TESTS and avail is not None and k not in avail]
+        added = self.order_tests(p, keys, uid)
+        if missing:
+            return f"Not available at {NETWORK[p['fac']]['name']}: {', '.join(missing)}. Refer if the patient needs it."
+        if not added:
             return "Choose at least one new test."
         self.join_team(p, uid)
 
@@ -996,12 +1262,15 @@ class Engine:
         if not p or key not in p["tests"] or p["tests"][key]["status"] != "pending":
             return "That test has already been reported."
         dept = TESTS[key]["dept"]
+        site = p["tests"][key].get("site") or dept
         role = "lab_scientist" if dept == "lab" else "radiographer"
         me = self.players[uid]
+        if p.get("fac", "akt") != "akt" and me["role"] in ("lab_scientist", "radiographer"):
+            role = me["role"]   # district labs are run by whoever is on the bench
         if me["role"] != role:
             return f"Only {ROLES[role]['name'].lower()}s can run this test."
-        if me["dept"] != dept:
-            return f"Go to {DEPTS[dept]['name']} first."
+        if me["dept"] != site:
+            return f"Go to {DEPTS[site]['name']} at {NETWORK[DEPTS[site]['fac']]['short']} first."
         if time.time() < self.power_until:
             return "No power. Wait for the generator."
         self.join_team(p, uid)
@@ -1009,7 +1278,7 @@ class Engine:
 
     def act_decide(self, uid, m):
         p = self.pat(m)
-        err = self.check(uid, p, CLINICIANS, "reviewed")
+        err = self.check(uid, p, self.clin(p) if p else CLINICIANS, "reviewed")
         if err:
             return err
         if any(x["status"] == "pending" for x in p["tests"].values()):
@@ -1021,6 +1290,8 @@ class Engine:
         except (TypeError, ValueError):
             return "Choose a diagnosis, the plan and where the patient goes."
         dispo = m.get("dispo")
+        if dispo not in FAC_DISPOS[p.get("fac", "akt")]:
+            return f"That option is not available at {NETWORK[p.get('fac', 'akt')]['name']}."
         if not 0 <= dx < len(c["dx_options"]) or dispo not in DISPOSITIONS or any(not 0 <= i < len(c["mgmt"]) for i in chosen):
             return "Choose a diagnosis, the plan and where the patient goes."
         if not chosen:
@@ -1099,17 +1370,19 @@ class Engine:
                 self.stat("referrals_refused")
             else:
                 self.award(uid, 8, f"Advised {c['facility']} to manage locally")
-            self.close_call(c)
+            if c["appropriate"]:
+                self.ethic(uid, "justice", -2, "You turned away a patient who needed a higher level of care.")
+            self.close_call(c, "local", by=me["name"])
         elif choice == "redirect":
             if capacity and c["appropriate"]:
                 self.award(uid, -6, "Redirected a referral while we had space")
-                self.close_call(c)
+                self.close_call(c, "redirect", random.choice(REDIRECT_HOSPITALS), by=me["name"])
             elif random.random() < 0.65:
                 other = random.choice(REDIRECT_HOSPITALS)
                 self.award(uid, 6, f"Found a bed at {other}")
                 self.pa(f"{me['name']} found a bed at {other} for the referral from {c['facility']}.", "good")
                 self.stat("redirected")
-                self.close_call(c)
+                self.close_call(c, "redirect", other, by=me["name"])
             else:
                 c["redirect_tried"] += 1
                 return "No space at the other hospitals you called either. Accept the patient or try again."
@@ -1117,7 +1390,9 @@ class Engine:
             self.award(uid, -10 if c["appropriate"] else -2, "Declined a referral without finding an alternative")
             self.pa(f"Referral from {c['facility']} was declined with no alternative found.", "bad")
             self.stat("referrals_refused")
-            self.close_call(c)
+            if c["appropriate"]:
+                self.ethic(uid, "justice", -2, "You declined a patient who needed care, with no alternative found.")
+            self.close_call(c, "decline", by=me["name"])
         else:
             return "Choose how to respond."
 
@@ -1143,7 +1418,7 @@ class Engine:
         self.join_team(p, uid)
         self.set_stage(p, "transfer")
         self.plog(p, f"{self.who(uid, '')} confirmed a bed at {centre}. Ambulance needed.")
-        self.pa(f"{centre} accepted {p['name']}. Dispatch an ambulance from the bay.", "amb")
+        self.pa(f"{centre} accepted {self.ini(p)}. Dispatch an ambulance from the bay.", "amb")
         self.award(uid, 8, f"Secured a bed at {centre}")
 
     def act_order_o2(self, uid, m):
@@ -1182,7 +1457,7 @@ class Engine:
         p["stability"] = min(100.0, p["stability"] + 5)
         self.join_team(p, uid)
         self.plog(p, f"Observations done by {self.who(uid, '')}: stable.")
-        self.award(uid, 2, f"Observations on {p['name']}")
+        self.award(uid, 2, f"Observations on {self.ini(p)}")
 
     def act_answer(self, uid, m):
         s = self.session
@@ -1199,6 +1474,72 @@ class Engine:
         if 0 <= opt < len(s["qs"][s["idx"]]["options"]):
             s["answers"][uid] = opt
 
+    def act_consent(self, uid, m):
+        p = self.pat(m)
+        err = self.check(uid, p, tuple(set(self.clin(p) if p else CLINICIANS) | set(CARERS)), "consent")
+        if err:
+            return err
+        if time.time() < p.get("consent_retry", 0):
+            return "Give them a little time to think before asking again."
+        return self.do_consent(p, uid)
+
+    def act_refer_note(self, uid, m):
+        p = self.pat(m)
+        err = self.check(uid, p, self.clin(p) if p else CLINICIANS, "refer_note")
+        if err:
+            return err
+        raw = m.get("note") or {}
+        note = {k: str(raw.get(k, "")).strip()[:500] for k in ("s", "b", "a", "r", "tx")}
+        if sum(1 for k in ("s", "b", "a", "r") if len(note[k]) >= 10) < 4:
+            return "Complete all four SBAR parts (situation, background, assessment, recommendation) with a sentence each."
+        named = False
+        for k in note:
+            note[k], hit = self.redact(note[k], None)
+            named = named or hit
+        if named:
+            self.ethic(uid, "confidentiality", -2, "Names removed from your note. In this game, identify patients by initials and folder number.")
+        c = p["case"]
+        score = 8 + (4 if any(kw in note["a"].lower() for kw in c["dx_keywords"]) else 0) + (3 if len(note["tx"]) >= 10 else 0)
+        self.write_note(p, uid, note)
+        self.award(uid, score, f"Referral note for {self.ini(p)}")
+        return None
+
+    def act_refer_call(self, uid, m):
+        p = self.pat(m)
+        err = self.check(uid, p, self.clin(p) if p else CLINICIANS, "refer_call")
+        if err:
+            return err
+        self.place_call(p, uid)
+        self.award(uid, 3, f"Called Akwaaba about {self.ini(p)}")
+        return None
+
+    def act_ref_update(self, uid, m):
+        p = self.pat(m)
+        if not p or not p.get("ref"):
+            return "There is no referring facility to update for this patient."
+        if p["ref"]["updated"]:
+            return "An update has already been sent."
+        me = self.players[uid]
+        if DEPTS[me["dept"]]["fac"] != "akt" or me["role"] not in ("doctor", "student", "nurse", "midwife"):
+            return "Updates are sent by the Akwaaba clinical team."
+        if not self.can_see(uid, p):
+            return "Only the care team can send an update."
+        text = str(m.get("text", "")).strip()[:400]
+        if len(text) < 15:
+            return "Write a short update: diagnosis, what you have done, and the plan."
+        text, _ = self.redact(text, uid, "update")
+        self.send_update(p, uid, text)
+        return None
+
+    def act_ask_update(self, uid, m):
+        item = next((i for q in self.inbox.values() for i in q if i["id"] == m.get("id")), None)
+        fac = self.fac_of_player(uid)
+        if not item or item["fac"] != fac:
+            return "Choose one of your facility's referrals."
+        self.pa(f"{NETWORK[fac]['short']} is asking Akwaaba for an update on {item['patient']}.", "call")
+        self.award(uid, 1, "Followed up a referral")
+        return None
+
     def act_chat(self, uid, m):
         t = time.time()
         text = str(m.get("text", "")).strip()[:280]
@@ -1207,6 +1548,7 @@ class Engine:
         if t - self.chat_last.get(uid, 0) < 1.0:
             return "Slow down a little."
         self.chat_last[uid] = t
+        text, _ = self.redact(text, uid, "chat message")
         me = self.players[uid]
         scope = "dept" if m.get("scope") == "dept" else "all"
         payload = {"t": "chat", "scope": scope, "dept": me["dept"], "from": me["name"], "role": me["role"],

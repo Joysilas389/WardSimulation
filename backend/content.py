@@ -22,6 +22,66 @@ DEPTS = {
     "conference": {"name": "Conference room", "icon": "bi-easel",          "blurb": "Clinical meetings and case presentations."},
 }
 
+for _d in DEPTS.values():
+    _d.setdefault("fac", "akt")
+
+# ---------- the health network: four facilities joined by roads ----------
+# All facility names are fictional. Akwaaba is the referral centre for the others.
+NETWORK = {
+    "akt": {"name": "Akwaaba Teaching Hospital", "short": "Akwaaba", "level": "Teaching hospital", "tier": 3, "entry": "emergency"},
+    "ndh": {"name": "Nkwanta District Hospital", "short": "Nkwanta", "level": "District hospital", "tier": 2, "entry": "ndh_casualty"},
+    "apc": {"name": "Asafo Polyclinic", "short": "Asafo", "level": "Polyclinic", "tier": 1, "entry": "apc_opd"},
+    "och": {"name": "Odumase CHPS Compound", "short": "Odumase", "level": "CHPS compound", "tier": 0, "entry": "och_room"},
+}
+DEPTS.update({
+    "ndh_casualty": {"name": "Casualty & OPD", "fac": "ndh", "icon": "bi-heart-pulse", "blurb": "Nkwanta's front door: triage, treat, admit what the district can manage, and refer the rest to Akwaaba."},
+    "ndh_ward":     {"name": "District ward", "fac": "ndh", "icon": "bi-hospital", "blurb": "Beds for patients the district hospital can manage."},
+    "ndh_mat":      {"name": "Maternity", "fac": "ndh", "icon": "bi-gender-female", "blurb": "Labour ward. Refer complications early."},
+    "ndh_lab":      {"name": "Lab & X-ray", "fac": "ndh", "icon": "bi-droplet-half", "blurb": "Blood tests, cultures and plain X-rays. No CT scanner here."},
+    "apc_opd":      {"name": "Consulting rooms", "fac": "apc", "icon": "bi-people", "blurb": "Outpatient care. Stabilise and refer anything serious."},
+    "apc_mat":      {"name": "Maternity", "fac": "apc", "icon": "bi-gender-female", "blurb": "Normal deliveries and antenatal care."},
+    "apc_lab":      {"name": "Laboratory", "fac": "apc", "icon": "bi-droplet-half", "blurb": "Full blood count, malaria films and kidney tests."},
+    "och_room":     {"name": "CHPS consulting room", "fac": "och", "icon": "bi-house-heart", "blurb": "Community health nurses test, start first-line treatment and refer."},
+    "och_mat":      {"name": "Delivery room", "fac": "och", "icon": "bi-gender-female", "blurb": "Midwife-led deliveries. Refer danger signs at once."},
+})
+# Where each facility runs its lab and imaging tests (bedside tests need no lab).
+FAC_LAB = {"akt": {"lab": "lab", "radiology": "radiology"}, "ndh": {"lab": "ndh_lab", "radiology": "ndh_lab"},
+           "apc": {"lab": "apc_lab"}, "och": {}}
+FAC_TESTS = {
+    "akt": None,  # everything
+    "ndh": {"malaria_rdt", "rbs", "urine_dipstick", "ecg", "blood_film", "fbc", "rft", "lft", "gxm", "clotting",
+            "blood_culture", "wound_swab", "widal", "cxr", "cspine", "xray_foot", "abd_xray", "obs_scan"},
+    "apc": {"malaria_rdt", "rbs", "urine_dipstick", "blood_film", "fbc", "rft", "widal"},
+    "och": {"malaria_rdt", "rbs", "urine_dipstick"},
+}
+# Who can clerk and decide: CHPS compounds and polyclinics are often nurse- and midwife-led.
+FAC_CLINICIANS = {"akt": ("doctor", "student"), "ndh": ("doctor", "student"),
+                  "apc": ("doctor", "student", "nurse", "midwife"), "och": ("nurse", "midwife", "doctor", "student")}
+FAC_DISPOS = {"akt": ["discharge", "admit_medical", "admit_surgical", "admit_paeds", "admit_maternity", "theatre", "refer_out"],
+              "ndh": ["discharge", "admit_local", "refer_up"], "apc": ["discharge", "refer_up"], "och": ["discharge", "refer_up"]}
+
+
+def fac_room(fac, case_dept):
+    if fac == "akt":
+        return case_dept
+    if case_dept == "maternity":
+        return f"{fac}_mat"
+    return {"ndh": "ndh_casualty", "apc": "apc_opd", "och": "och_room"}[fac]
+
+
+def correct_dispo(case, fac):
+    """What the right decision is at this level of care."""
+    if fac == "akt" or case["dispo"] == "discharge":
+        return case["dispo"]
+    if NETWORK[fac]["tier"] >= 2 and case["triage"] in ("yellow", "orange") and case["dispo"] in ("admit_medical", "admit_paeds", "admit_maternity"):
+        return "admit_local"
+    return "refer_up"
+
+
+def tests_at(fac):
+    return FAC_TESTS[fac]
+
+
 WARDS = ("medical", "surgical", "paeds", "maternity")
 
 # Capacity. Maternity and Paediatrics are both admitting units and wards.
@@ -31,11 +91,9 @@ OXYGEN_START = 12                                            # cylinders in stoc
 FLEET = ["Unit 1", "Unit 2", "Unit 3"]                       # National Ambulance Service units based here
 
 # Facilities that refer to us, with their level in the referral system.
-REFERRING = [("Ada East CHPS compound", "CHPS compound"), ("Abokobi Health Centre", "Health centre"),
-             ("Weija Health Centre", "Health centre"), ("Dodowa District Hospital", "District hospital"),
-             ("Nsawam Government Hospital", "District hospital"), ("Amasaman Municipal Hospital", "Municipal hospital"),
-             ("Kasoa Polyclinic", "Polyclinic"), ("Prampram Polyclinic", "Polyclinic"),
-             ("Eastern Regional Hospital, Koforidua", "Regional hospital")]
+REFERRING = [("Nkwanta District Hospital", "District hospital"), ("Asafo Polyclinic", "Polyclinic"),
+             ("Odumase CHPS Compound", "CHPS compound"), ("Abrewa Health Centre", "Health centre"),
+             ("Sika Municipal Hospital", "Municipal hospital"), ("Nyame Dua Health Centre", "Health centre")]
 # Fictional hospitals we can try when we have no bed or oxygen.
 REDIRECT_HOSPITALS = ["Sankofa Regional Hospital", "Adinkra Regional Hospital", "Kente Teaching Hospital"]
 # Fictional specialist centres for patients we refer out.
@@ -60,6 +118,8 @@ DISPOSITIONS = {
     "admit_maternity": "Admit to Maternity",
     "theatre":         "Send to theatre",
     "refer_out":       "Refer to a specialist centre",
+    "refer_up":        "Refer to Akwaaba Teaching Hospital",
+    "admit_local":     "Admit to our ward",
 }
 WARD_OF = {"admit_medical": "medical", "admit_surgical": "surgical",
            "admit_paeds": "paeds", "admit_maternity": "maternity"}
